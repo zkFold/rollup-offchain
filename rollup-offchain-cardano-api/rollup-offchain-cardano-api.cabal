@@ -40,44 +40,56 @@ library
   import: common
   exposed-modules:
     ZkFold.Cardano.Rollup.Api
+    ZkFold.Cardano.Rollup.Api.Utils
     ZkFold.Cardano.Rollup.Constants
     ZkFold.Cardano.Rollup.Orphans
-    ZkFold.Cardano.Rollup.Utils
     ZkFold.Cardano.Rollup.Types
     ZkFold.Cardano.Rollup.Types.Errors
     ZkFold.Cardano.Rollup.Types.Monad
     ZkFold.Cardano.Rollup.Types.Script
+    ZkFold.Cardano.Rollup.Utils
 
   -- other-modules:
   -- other-extensions:
+  -- TODO: Review build-deps
   build-depends:
     aeson,
-    aeson-casing,
-    aeson-picker,
     atlas-cardano,
     base >=4.18.2.1 && <5,
     base16-bytestring,
     bytestring,
-    cardano-api,
-    cardano-ledger-core,
-    containers,
     cryptonite,
-    data-default,
-    deriving-aeson,
-    ginger,
     http-types,
     lens,
-    mime-mail,
     mtl,
     plutus-tx,
-    req,
-    smtp-mail,
-    sqlite-simple,
     swagger2,
-    symbolic-examples,
+    symbolic-base,
+    symbolic-ledger,
     text,
-    time,
     zkfold-cardano,
     zkfold-cardano-scripts-common,
 
   hs-source-dirs: src
+
+test-suite rollup-offchain-cardano-api-tests
+  import: common
+  -- other-modules:
+  -- other-extensions:
+  type: exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is: Main.hs
+  other-modules:
+    ZkFold.Cardano.Rollup.Test
+    ZkFold.Cardano.Rollup.Test.Update
+
+  build-depends:
+    atlas-cardano,
+    base,
+    bytestring,
+    mtl,
+    rollup-offchain-cardano-api,
+    symbolic-base,
+    symbolic-ledger,
+    tasty,
+    tasty-hunit,

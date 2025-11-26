@@ -4,7 +4,7 @@ module ZkFold.Cardano.Rollup.Types.Script (
 ) where
 
 import GeniusYield.Types
-import ZkFold.Symbolic.Examples.SmartWallet (ZKSetupBytes) -- TODO: Correct import.
+import ZkFold.Protocol.Plonkup.OffChain.Cardano (ZKSetupBytes)
 
 -- | Information required to build transactions for rollup.
 newtype ZKRollupBuildInfo = ZKRollupBuildInfo
