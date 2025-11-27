@@ -14,7 +14,7 @@ import GeniusYield.TxBuilder (GYTxBuilderMonadIO, GYTxQueryMonadIO)
 import GeniusYield.TxBuilder.IO.Unsafe (unsafeIOToQueryMonad, unsafeIOToTxBuilderMonad)
 import GeniusYield.Types hiding (nonAdaTokenFromAssetClass, nonAdaTokenToAssetClass)
 import GeniusYield.Types.OpenApi ()
-import ZkFold.Symbolic.Examples.SmartWallet (ByteStringFromHex (..), ZKF (..), ZKProofBytes (..)) -- TODO: Correct import.
+import ZkFold.Protocol.Plonkup.OffChain.Cardano (ByteStringFromHex (..), ZKF (..), ZKProofBytes (..))
 
 instance MonadIO GYTxBuilderMonadIO where
   liftIO = unsafeIOToTxBuilderMonad
