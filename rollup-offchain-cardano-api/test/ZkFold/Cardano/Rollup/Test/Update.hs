@@ -46,6 +46,7 @@ rollupUpdateTests setup =
             proofB = ledgerProof @ByteString ts proverSecret compiledCircuit lci & mkProof
             fundUser = ctxUserF ctx
             rollupState0 = stateToRollupState prevState
+            rollupState1 = stateToRollupState newState
         (initializedBuildInfo, txBodySeed) ← ctxRunBuilder ctx fundUser $ seedRollup setupB Nothing rollupState0
         tidSeed ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodySeed
         info $ "Seed rollup transaction submitted: " <> show tidSeed
@@ -53,7 +54,7 @@ rollupUpdateTests setup =
         let proofBPlutus = proofToPlutus proofB
         txBodyUpdate ←
           ctxRunBuilder ctx fundUser $
-            runReaderT (updateRollupState rollupState0 proofBPlutus >>= buildTxBody) initializedBuildInfo
+            runReaderT (updateRollupState rollupState1 proofBPlutus >>= buildTxBody) initializedBuildInfo
         tidUpdate ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate
         info $ "Update rollup transaction submitted: " <> show tidUpdate
     ]
