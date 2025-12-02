@@ -6,10 +6,12 @@ import Control.Exception (Exception)
 import Data.Text qualified as Text
 import GeniusYield.HTTP.Errors (GYApiError (..), IsGYApiError (..))
 import GeniusYield.Types
-import Network.HTTP.Types (status500)
+import Network.HTTP.Types (status400, status500)
 
 data ZKRollupException
   = ZKREStateUTxONotFound GYAddress GYNonAdaToken
+  | ZKREValueHasMoreThanMaxAssets GYValue Natural
+  | ZKREStakeAddressInfoNotFound GYStakeAddress
   deriving stock Show
   deriving anyclass Exception
 
@@ -21,4 +23,20 @@ instance IsGYApiError ZKRollupException where
       , gaeMsg =
           Text.pack $
             "Could not find state UTXO for the given rollup address: " <> show rollupAddr <> " and NFT: " <> show nft <> "."
+      }
+  toApiError (ZKREValueHasMoreThanMaxAssets value maxAssets) =
+    GYApiError
+      { gaeErrorCode = "VALUE_HAS_MORE_THAN_MAX_ASSETS"
+      , gaeHttpStatus = status400
+      , gaeMsg =
+          Text.pack $
+            "Value has more than max assets: " <> show value <> " , max assets allowed: " <> show maxAssets <> "."
+      }
+  toApiError (ZKREStakeAddressInfoNotFound stakeAddr) =
+    GYApiError
+      { gaeErrorCode = "STAKE_ADDRESS_INFO_NOT_FOUND"
+      , gaeHttpStatus = status500
+      , gaeMsg =
+          Text.pack $
+            "Could not find stake address info for the given stake address: " <> show stakeAddr <> "."
       }

@@ -12,7 +12,6 @@ import GeniusYield.Imports (Text, encodeUtf8, (&), (<&>))
 import GeniusYield.Types
 import PlutusTx (ToData)
 import ZkFold.Cardano.Rollup.Types
-import ZkFold.Cardano.Rollup.Utils (setupToPlutus)
 import ZkFold.Cardano.UPLC.RollupSimple.CompiledScript
 
 -- | Select a particular validator from blueprints file.
@@ -37,13 +36,15 @@ ezkRollupBuildInfo = do
   bp ← Aeson.eitherDecodeStrict rollupSimpleBPFile
   let vals = contractValidators bp
   rollupSimple ← selectValScript @PlutusV3 vals "rollupSimple"
+  rollupSimpleStake ← selectValScript @PlutusV3 vals "rollupSimpleStake"
   pure $
     ZKRollupBuildInfo
-      { zkrbiRollup = \sb cs tn →
+      { zkrbiRollup = \sh →
           rollupSimple
-            & fapplyParam (setupToPlutus sb)
-            & fapplyParam (mintingPolicyIdToCurrencySymbol cs)
-            & fapplyParam (tokenNameToPlutus tn)
+            & fapplyParam (scriptHashToPlutus sh)
+      , zkrbiRollupStake = \config →
+          rollupSimpleStake
+            & fapplyParam (rollupStakeValConfigToPlutus config)
       }
  where
   fapplyParam ∷ (ToData p, SingPlutusVersionI v) ⇒ p → GYScript v → GYScript v
