@@ -162,7 +162,7 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
       valueOutReq = foldMap' fst bridgeOuts
       valueAvail = foldMapUTxOs utxoValue rollupUTxOsWithoutState
       valueRem = valueAvail `valueMinus` valueOutReq
-  when (valueOutReq `valueGreater` valueAvail) $
+  when ((valueOutReq `valueGreater` valueAvail) && valueOutReq /= mempty) $
     throwAppError $
       ZKREBridgeOutValMoreThanAvail valueAvail valueOutReq
   let
