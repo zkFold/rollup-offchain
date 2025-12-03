@@ -19,7 +19,7 @@ import ZkFold.Cardano.Rollup.Constants
 import ZkFold.Cardano.Rollup.Types
 import ZkFold.Cardano.UPLC.RollupSimple.Types (
   BridgeUtxoInfo (..),
-  BridgeUtxoStatus (BridgeIn),
+  BridgeUtxoStatus (..),
   RollupSimpleRed (..),
   RollupState,
  )
@@ -130,13 +130,16 @@ updateRollupState
   ⇒ RollupState
   → [(GYValue, FieldElement RollupBFInterpreter)]
   -- ^ Value to bridge in along with layer 2 address which will hold this value.
+  → [(GYValue, GYAddress)]
+  -- ^ Value to bridge-out.
   → ProofBytes
   → m (GYTxSkeleton 'PlutusV3)
-updateRollupState newState bridgeIns' proofBytes = do
+updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
   ZKInitializedRollupBuildInfo {..} ← ask
   -- We reverse the given list as in plutus validator, when it traverses the outputs, it adds the later item in list to the beginning of it's own internal list.
   let bridgeIns = reverse bridgeIns'
-  forM_ bridgeIns $ \(value, _) →
+      bridgeOuts = reverse bridgeOuts'
+  forM_ (map fst bridgeIns <> map fst bridgeOuts) $ \value →
     when (fromIntegral (valueTotalAssets value) > zkrsvcMaxOutputAssets zkirbiRollupStakeValConfig) $
       throwAppError $
         ZKREValueHasMoreThanMaxAssets value (fromIntegral (zkrsvcMaxOutputAssets zkirbiRollupStakeValConfig))
@@ -148,11 +151,15 @@ updateRollupState newState bridgeIns' proofBytes = do
     stakeAddressInfo stakeAddr >>= \case
       Just si → pure si
       Nothing → throwAppError $ ZKREStakeAddressInfoNotFound stakeAddr
+  rollupUTxOs ← utxosAtAddress rollupAddr Nothing
   rollupUTxO ←
-    utxosAtAddress rollupAddr (Just $ nonAdaTokenToAssetClass zkirbiNFT) >>= \utxos → case utxosToList utxos of
+    case filterUTxOs (\utxo → valueAssetClass (utxoValue utxo) (nonAdaTokenToAssetClass zkirbiNFT) == 1) rollupUTxOs
+      & utxosToList of
       [utxo] → pure utxo
       _anyOther → throwAppError $ ZKREStateUTxONotFound rollupAddr zkirbiNFT
-  let newOut ∷ GYTxOut 'PlutusV3 =
+  let rollupUTxOsWithoutState = utxosRemoveTxOutRef (utxoRef rollupUTxO) rollupUTxOs
+      valueOutReq = foldMap' fst bridgeOuts
+      newOut ∷ GYTxOut 'PlutusV3 =
         GYTxOut
           { gyTxOutValue = utxoValue rollupUTxO
           , gyTxOutRefS = Nothing
@@ -191,6 +198,34 @@ updateRollupState newState bridgeIns' proofBytes = do
                 }
         )
         bridgeIns
+      <> foldMap'
+        ( \(val, addr) →
+            mustHaveOutput $
+              GYTxOut
+                { gyTxOutValue = val
+                , gyTxOutRefS = Nothing
+                , gyTxOutDatum =
+                    Just
+                      ( datumFromPlutusData $
+                          BridgeUtxoInfo
+                            { buiStatus = BridgeOut
+                            , buiORef = utxoRef rollupUTxO & txOutRefToPlutusV3
+                            }
+                      , GYTxOutUseInlineDatum
+                      )
+                , gyTxOutAddress = addr
+                }
+        )
+        bridgeOuts
+      <> foldMapUTxOs
+        ( \utxo →
+            mustHaveInput $
+              GYTxIn
+                { gyTxInTxOutRef = utxoRef utxo
+                , gyTxInWitness = GYTxInWitnessScript (GYBuildPlutusScriptReference zkirbiRollupRef zkirbiRollup) Nothing unitRedeemer
+                }
+        )
+        rollupUTxOsWithoutState
       <> mustHaveWithdrawal
         ( GYTxWdrl
             { gyTxWdrlStakeAddress = stakeAddr
