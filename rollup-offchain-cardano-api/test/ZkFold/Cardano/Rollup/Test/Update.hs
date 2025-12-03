@@ -8,7 +8,7 @@ import GeniusYield.Imports ((&))
 import GeniusYield.Test.Privnet.Ctx
 import GeniusYield.Test.Privnet.Setup
 import GeniusYield.TxBuilder
-import GeniusYield.Types (addressToPlutus, unsafeAddressFromText, valueFromLovelace)
+import GeniusYield.Types (unsafeAddressFromText, valueFromLovelace)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCaseSteps)
 import ZkFold.Algebra.Class (Zero (..))
@@ -16,7 +16,6 @@ import ZkFold.Cardano.Rollup.Api
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Cardano.Rollup.Types
 import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
-import ZkFold.Cardano.UPLC.RollupSimple.Utils
 import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
 import ZkFold.Symbolic.Ledger.Circuit.Compile (

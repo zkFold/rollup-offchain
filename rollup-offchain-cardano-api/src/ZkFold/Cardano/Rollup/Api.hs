@@ -159,6 +159,12 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
       _anyOther → throwAppError $ ZKREStateUTxONotFound rollupAddr zkirbiNFT
   let rollupUTxOsWithoutState = utxosRemoveTxOutRef (utxoRef rollupUTxO) rollupUTxOs
       valueOutReq = foldMap' fst bridgeOuts
+      valueAvail = foldMapUTxOs utxoValue rollupUTxOsWithoutState
+      valueRem = valueAvail `valueMinus` valueOutReq
+  when (valueOutReq `valueGreater` valueAvail) $
+    throwAppError $
+      ZKREBridgeOutValMoreThanAvail valueAvail valueOutReq
+  let
       newOut ∷ GYTxOut 'PlutusV3 =
         GYTxOut
           { gyTxOutValue = utxoValue rollupUTxO
@@ -166,7 +172,10 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
           , gyTxOutDatum = Just (datumFromPlutusData newState, GYTxOutUseInlineDatum)
           , gyTxOutAddress = rollupAddr
           }
-
+  -- Note that there are slight issues which may not allow us to support any bridge out case.
+  --
+  -- 1. Due to minimum ada requirements, since our bridge-out output is having an inline datum, it's minimum ada requirements would be slightly higher. And as onchain validator is strict with respect to amounts, we can only support those bridge-out scenarios where provided ada is sufficient to satisfy minimum ada requirement.
+  -- 2. Since minimum ada restriction also apply to bridge balance outputs, it restricts what user can take from available bridged balance as remaining (if any) must satisfy minimum ada requirement.
   pure $
     mustHaveInput
       ( GYTxIn
@@ -217,6 +226,7 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
                 }
         )
         bridgeOuts
+      -- For simplicity, we are taking all bridged-in UTxOs as inputs. This can be made more clever later.
       <> foldMapUTxOs
         ( \utxo →
             mustHaveInput $
@@ -242,3 +252,23 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
                   )
             }
         )
+      -- For simplicity, we are putting remaining value in a single output. This of course can be problematic if not all assets fit in a single output.
+      <> (if valueRem /= mempty then
+      
+            mustHaveOutput
+            ( GYTxOut
+                { gyTxOutValue = valueRem
+                , gyTxOutRefS = Nothing
+                , gyTxOutDatum =
+                    Just
+                      ( datumFromPlutusData $
+                          BridgeUtxoInfo
+                            { buiStatus = BridgeBalance
+                            , buiORef = utxoRef rollupUTxO & txOutRefToPlutusV3
+                            }
+                      , GYTxOutUseInlineDatum
+                      )
+                , gyTxOutAddress = rollupAddr
+                }
+            )
+            else mempty)

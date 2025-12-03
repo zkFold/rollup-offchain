@@ -12,6 +12,7 @@ data ZKRollupException
   = ZKREStateUTxONotFound GYAddress GYNonAdaToken
   | ZKREValueHasMoreThanMaxAssets GYValue Natural
   | ZKREStakeAddressInfoNotFound GYStakeAddress
+  | ZKREBridgeOutValMoreThanAvail GYValue GYValue
   deriving stock Show
   deriving anyclass Exception
 
@@ -39,4 +40,12 @@ instance IsGYApiError ZKRollupException where
       , gaeMsg =
           Text.pack $
             "Could not find stake address info for the given stake address: " <> show stakeAddr <> "."
+      }
+  toApiError (ZKREBridgeOutValMoreThanAvail valueAvail valueOutReq) =
+    GYApiError
+      { gaeErrorCode = "BRIDGE_OUT_VALUE_MORE_THAN_AVAILABLE"
+      , gaeHttpStatus = status400
+      , gaeMsg =
+          Text.pack $
+            "Bridge out value, " <> show valueOutReq <> " is more than available value, " <> show valueAvail <> "."
       }
