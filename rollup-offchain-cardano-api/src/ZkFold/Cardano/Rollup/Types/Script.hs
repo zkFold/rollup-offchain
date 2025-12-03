@@ -6,9 +6,10 @@ module ZkFold.Cardano.Rollup.Types.Script (
 ) where
 
 import GeniusYield.Types
-import ZkFold.Cardano.Rollup.Utils (setupToPlutus)
 import ZkFold.Cardano.UPLC.RollupSimple.Types qualified as Onchain
 import ZkFold.Protocol.Plonkup.OffChain.Cardano (ZKSetupBytes)
+
+import ZkFold.Cardano.Rollup.Utils (setupToPlutus)
 
 data ZKRollupStakeValConfig = ZKRollupStakeValConfig
   { zkrsvcNFT ∷ GYNonAdaToken

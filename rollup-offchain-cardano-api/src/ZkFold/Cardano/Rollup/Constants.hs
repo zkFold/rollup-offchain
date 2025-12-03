@@ -11,8 +11,9 @@ import Data.Text (unpack)
 import GeniusYield.Imports (Text, encodeUtf8, (&), (<&>))
 import GeniusYield.Types
 import PlutusTx (ToData)
-import ZkFold.Cardano.Rollup.Types
 import ZkFold.Cardano.UPLC.RollupSimple.CompiledScript
+
+import ZkFold.Cardano.Rollup.Types
 
 -- | Select a particular validator from blueprints file.
 selectValScript

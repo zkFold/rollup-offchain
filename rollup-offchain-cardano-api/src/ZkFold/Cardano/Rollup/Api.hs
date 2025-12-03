@@ -15,8 +15,6 @@ import GeniusYield.TxBuilder
 import GeniusYield.Types
 import ZkFold.Algebra.Class (ToConstant (toConstant))
 import ZkFold.Cardano.OnChain.Plonkup.Data (ProofBytes)
-import ZkFold.Cardano.Rollup.Constants
-import ZkFold.Cardano.Rollup.Types
 import ZkFold.Cardano.UPLC.RollupSimple.Types (
   BridgeUtxoInfo (..),
   BridgeUtxoStatus (..),
@@ -26,6 +24,9 @@ import ZkFold.Cardano.UPLC.RollupSimple.Types (
 import ZkFold.Protocol.Plonkup.OffChain.Cardano
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
+
+import ZkFold.Cardano.Rollup.Constants
+import ZkFold.Cardano.Rollup.Types
 
 -- | Get the rollup address.
 rollupAddress ∷ ZKRollupQueryMonad m ⇒ m GYAddress
@@ -165,13 +166,13 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
     throwAppError $
       ZKREBridgeOutValMoreThanAvail valueAvail valueOutReq
   let
-      newOut ∷ GYTxOut 'PlutusV3 =
-        GYTxOut
-          { gyTxOutValue = utxoValue rollupUTxO
-          , gyTxOutRefS = Nothing
-          , gyTxOutDatum = Just (datumFromPlutusData newState, GYTxOutUseInlineDatum)
-          , gyTxOutAddress = rollupAddr
-          }
+    newOut ∷ GYTxOut 'PlutusV3 =
+      GYTxOut
+        { gyTxOutValue = utxoValue rollupUTxO
+        , gyTxOutRefS = Nothing
+        , gyTxOutDatum = Just (datumFromPlutusData newState, GYTxOutUseInlineDatum)
+        , gyTxOutAddress = rollupAddr
+        }
   -- Note that there are slight issues which may not allow us to support any bridge out case.
   --
   -- 1. Due to minimum ada requirements, since our bridge-out output is having an inline datum, it's minimum ada requirements would be slightly higher. And as onchain validator is strict with respect to amounts, we can only support those bridge-out scenarios where provided ada is sufficient to satisfy minimum ada requirement.
@@ -253,22 +254,23 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
             }
         )
       -- For simplicity, we are putting remaining value in a single output. This of course can be problematic if not all assets fit in a single output.
-      <> (if valueRem /= mempty then
-      
-            mustHaveOutput
-            ( GYTxOut
-                { gyTxOutValue = valueRem
-                , gyTxOutRefS = Nothing
-                , gyTxOutDatum =
-                    Just
-                      ( datumFromPlutusData $
-                          BridgeUtxoInfo
-                            { buiStatus = BridgeBalance
-                            , buiORef = utxoRef rollupUTxO & txOutRefToPlutusV3
-                            }
-                      , GYTxOutUseInlineDatum
-                      )
-                , gyTxOutAddress = rollupAddr
-                }
-            )
-            else mempty)
+      <> ( if valueRem /= mempty
+             then
+               mustHaveOutput
+                 ( GYTxOut
+                     { gyTxOutValue = valueRem
+                     , gyTxOutRefS = Nothing
+                     , gyTxOutDatum =
+                         Just
+                           ( datumFromPlutusData $
+                               BridgeUtxoInfo
+                                 { buiStatus = BridgeBalance
+                                 , buiORef = utxoRef rollupUTxO & txOutRefToPlutusV3
+                                 }
+                           , GYTxOutUseInlineDatum
+                           )
+                     , gyTxOutAddress = rollupAddr
+                     }
+                 )
+             else mempty
+         )

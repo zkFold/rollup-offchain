@@ -12,10 +12,6 @@ import GeniusYield.Types (unsafeAddressFromText, valueFromLovelace)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCaseSteps)
 import ZkFold.Algebra.Class (Zero (..))
-import ZkFold.Cardano.Rollup.Api
-import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
-import ZkFold.Cardano.Rollup.Types
-import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
 import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
@@ -44,6 +40,11 @@ import ZkFold.Symbolic.Ledger.Examples.One (
   witness,
   witness2,
  )
+
+import ZkFold.Cardano.Rollup.Api
+import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
+import ZkFold.Cardano.Rollup.Types
+import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
 
 rollupUpdateTests ∷ Setup → TestTree
 rollupUpdateTests setup =
