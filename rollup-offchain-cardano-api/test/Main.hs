@@ -2,6 +2,7 @@ module Main (main) where
 
 import GeniusYield.Test.Privnet.Setup
 import Test.Tasty (defaultMain, testGroup)
+
 import ZkFold.Cardano.Rollup.Test (rollupTests)
 
 main ∷ IO ()

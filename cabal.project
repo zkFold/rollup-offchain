@@ -17,7 +17,7 @@ tests: true
 source-repository-package
   type: git
   location: https://github.com/zkFold/zkfold-cardano
-  tag: 17f2cf54a1d70a0a8b7f7ac7a47d097876dffc34
+  tag: ed83d9ca5d97e26ac28e8d09e7eb7773f3068e82
   subdir:
     zkfold-cardano
     zkfold-cardano-scripts
@@ -26,7 +26,7 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/zkFold/symbolic.git
-  tag: 00ede0daddfc4266346e5d6f9d3ef5bc0659a2b5
+  tag: b9c2a8a78a93da3da17c40cf9bd31bdb31780b04
   subdir: 
     symbolic-base
     symbolic-examples
@@ -35,7 +35,7 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/geniusyield/atlas
-  tag: 9575399d961dcc4ab7a113d3cface8a13693d46b
+  tag: 02aaeaaf6a04b084257ed783a2819b3db839c3f6
   subdir:
     plutus/atlas-onchain-common
     .
