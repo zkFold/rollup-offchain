@@ -3,6 +3,7 @@ module ZkFold.Cardano.Rollup.Utils (
   proofToPlutus,
 ) where
 
+import Data.ByteString (ByteString)
 import Data.Coerce (coerce)
 import PlutusTx.Builtins qualified as PlutusTx
 import ZkFold.Cardano.OnChain.BLS12_381.F (F (..))
@@ -19,20 +20,23 @@ setupToPlutus ZKSetupBytes {..} =
     , omegaNPrv = coerce omegaNPrv_int
     , k1 = coerce k1_int
     , k2 = coerce k2_int
-    , h1_bytes = PlutusTx.toBuiltin h1_bytes
-    , cmQm_bytes = PlutusTx.toBuiltin cmQm_bytes
-    , cmQl_bytes = PlutusTx.toBuiltin cmQl_bytes
-    , cmQr_bytes = PlutusTx.toBuiltin cmQr_bytes
-    , cmQo_bytes = PlutusTx.toBuiltin cmQo_bytes
-    , cmQc_bytes = PlutusTx.toBuiltin cmQc_bytes
-    , cmQk_bytes = PlutusTx.toBuiltin cmQk_bytes
-    , cmS1_bytes = PlutusTx.toBuiltin cmS1_bytes
-    , cmS2_bytes = PlutusTx.toBuiltin cmS2_bytes
-    , cmS3_bytes = PlutusTx.toBuiltin cmS3_bytes
-    , cmT1_bytes = PlutusTx.toBuiltin cmT1_bytes
-    , cmT2_bytes = PlutusTx.toBuiltin cmT2_bytes
-    , cmT3_bytes = PlutusTx.toBuiltin cmT3_bytes
+    , h1_bytes = PlutusTx.toBuiltin . wb $ h1_bytes
+    , cmQm_bytes = PlutusTx.toBuiltin . wb $ cmQm_bytes
+    , cmQl_bytes = PlutusTx.toBuiltin . wb $ cmQl_bytes
+    , cmQr_bytes = PlutusTx.toBuiltin . wb $ cmQr_bytes
+    , cmQo_bytes = PlutusTx.toBuiltin . wb $ cmQo_bytes
+    , cmQc_bytes = PlutusTx.toBuiltin . wb $ cmQc_bytes
+    , cmQk_bytes = PlutusTx.toBuiltin . wb $ cmQk_bytes
+    , cmS1_bytes = PlutusTx.toBuiltin . wb $ cmS1_bytes
+    , cmS2_bytes = PlutusTx.toBuiltin . wb $ cmS2_bytes
+    , cmS3_bytes = PlutusTx.toBuiltin . wb $ cmS3_bytes
+    , cmT1_bytes = PlutusTx.toBuiltin . wb $ cmT1_bytes
+    , cmT2_bytes = PlutusTx.toBuiltin . wb $ cmT2_bytes
+    , cmT3_bytes = PlutusTx.toBuiltin . wb $ cmT3_bytes
     }
+ where
+  wb ∷ ByteStringFromHex → ByteString
+  wb (ByteStringFromHex bs) = bs
 
 proofToPlutus ∷ ZKProofBytes → ProofBytes
 proofToPlutus ZKProofBytes {..} =

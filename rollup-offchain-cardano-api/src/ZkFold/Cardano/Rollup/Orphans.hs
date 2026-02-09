@@ -45,16 +45,6 @@ instance Swagger.ToSchema ZKF where
     Swagger.genericDeclareNamedSchema Swagger.defaultSchemaOptions
       & addSwaggerDescription "Field element."
 
-instance Swagger.ToSchema ByteStringFromHex where
-  declareNamedSchema _ =
-    pure $
-      Swagger.named "ByteStringFromHex" $
-        mempty & Swagger.type_
-          ?~ Swagger.SwaggerString & Swagger.format
-          ?~ "hex"
-            & Swagger.description
-          ?~ "Bytes encoded in hex."
-
 instance Swagger.ToSchema ZKProofBytes where
   declareNamedSchema =
     Swagger.genericDeclareNamedSchema Swagger.defaultSchemaOptions
