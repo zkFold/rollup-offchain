@@ -193,7 +193,7 @@ endToEndTests setup =
             case queuedTxs2 of
               [] → assertFailure "No transactions in batch queue"
               _ → do
-                tid ← processBatch aggCtx queuedTxs
+                tid ← processBatch aggCtx queuedTxs2
                 info $ "Batch submitted: " <> show tid
                 info "End-to-end test passed"
         ]
