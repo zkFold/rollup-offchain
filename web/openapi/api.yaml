@@ -102,7 +102,7 @@ components:
       - orTxId
       - orIndex
       type: object
-    Output_1_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
+    Output_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
         oAddress:
           type: integer
@@ -160,7 +160,7 @@ components:
             type: array
           type: array
         transaction:
-          $ref: '#/components/schemas/Transaction_1_1_1_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          $ref: '#/components/schemas/Transaction_2_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
       required:
       - transaction
       - signatures
@@ -174,7 +174,7 @@ components:
       required:
       - status
       type: object
-    Transaction_1_1_1_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
+    Transaction_2_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
         inputs:
           items:
@@ -183,7 +183,7 @@ components:
         outputs:
           items:
             items:
-            - $ref: '#/components/schemas/Output_1_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+            - $ref: '#/components/schemas/Output_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
             - type: boolean
             maxItems: 2
             minItems: 2

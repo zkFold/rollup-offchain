@@ -116,7 +116,7 @@ cabal run rollup-seed -- \
   --max-output-assets 2
 ```
 
-Sample server execution command `cabal run rollup-aggregator-server -- serve -c secrets/config-preprod.yaml`.
+Sample server execution command `cabal run rollup-aggregator-server:rollup-aggregator-server -- serve -c secrets/config-preprod.yaml`.
 
 ### Tests
 
