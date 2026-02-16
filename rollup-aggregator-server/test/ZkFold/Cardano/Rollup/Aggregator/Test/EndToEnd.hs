@@ -109,7 +109,7 @@ endToEndTests setup =
                     , AggCtx.ctxTrustedSetup = ts
                     , AggCtx.ctxLedgerCircuit = circuit
                     , AggCtx.ctxProverSecret = proverSecret
-                    , AggCtx.ctxStatePersistPath = Nothing
+                    , AggCtx.ctxStatePersistPath = "/tmp/rollup-aggregator-test-state.json"
                     }
 
             -- Step 4: Bridge-in via handleBridgeIn (10 ADA + 50 asset2)

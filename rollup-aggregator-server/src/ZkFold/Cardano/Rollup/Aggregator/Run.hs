@@ -103,16 +103,12 @@ runServer mConfigPath = do
             , zkirbiRollupStakeValConfig = stakeValConfig
             }
 
-    mPersistedState ← case scStatePersistPath serverConfig of
-      Just path → do
-        mState ← loadState path
-        case mState of
-          Just _ → logInfoS "Restored persisted ledger state from disk."
-          Nothing → logInfoS "No persisted state found, starting fresh."
-        pure mState
-      Nothing → do
-        logInfoS "State persistence not configured, starting fresh."
-        pure Nothing
+    mPersistedState ← do
+      mState ← loadState (scStatePersistPath serverConfig)
+      case mState of
+        Just _ → logInfoS "Restored persisted ledger state from disk."
+        Nothing → logInfoS "No persisted state found, starting fresh."
+      pure mState
     (batchQueue, ledgerStateVar, utxoPreimageVar, trustedSetup, ledgerCircuit, proverSecret) ← initBatcherState mPersistedState
     let
       -- These are only meant to catch fatal exceptions, application thrown exceptions should be caught beforehand.

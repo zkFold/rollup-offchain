@@ -229,7 +229,5 @@ processBatch ctx@Ctx {..} queuedTxs = do
   atomically $ do
     writeTVar ctxLedgerStateVar newState
     writeTVar ctxUtxoPreimageVar newPreimage
-  case ctxStatePersistPath of
-    Just persistPath → saveState persistPath newState newPreimage
-    Nothing → pure ()
+  saveState ctxStatePersistPath newState newPreimage
   pure submittedTxId
