@@ -1,6 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-
 module Main (main) where
 
 import Control.Monad.Reader (ReaderT (runReaderT))
@@ -15,17 +12,8 @@ import GeniusYield.Types
 import Options.Applicative
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
-import ZkFold.Cardano.Rollup.Api
-import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
-import ZkFold.Cardano.Rollup.Types
-import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
-import ZkFold.Symbolic.Ledger.Circuit.Compile (
-  LedgerContractInput (..),
-  ledgerCircuit,
-  ledgerSetup,
-  mkSetup,
- )
-import ZkFold.Symbolic.Ledger.Examples.Three (
+import ZkFold.Cardano.Rollup.Aggregator.Batcher (initialState)
+import ZkFold.Cardano.Rollup.Aggregator.Types (
   A,
   Bi,
   Bo,
@@ -34,10 +22,15 @@ import ZkFold.Symbolic.Ledger.Examples.Three (
   Oxs,
   TxCount,
   Ud,
-  batch,
-  newState,
-  prevState,
-  witness,
+ )
+import ZkFold.Cardano.Rollup.Api
+import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
+import ZkFold.Cardano.Rollup.Types
+import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
+import ZkFold.Symbolic.Ledger.Circuit.Compile (
+  ledgerCircuit,
+  ledgerSetup,
+  mkSetup,
  )
 
 main ∷ IO ()
@@ -108,10 +101,10 @@ parseRollupSeedCommand =
 runCommand ∷ RollupSeedCommand → IO ()
 runCommand RollupSeedCommand {..} = do
   coreConfig ← coreConfigIO rscProviderConfig
-  let nid = cfgNetworkId coreConfig
   signingKey ∷ GYSigningKey 'GYKeyRolePayment ← readSigningKey rscSigningKey
-  let signingKeyAddress = signingKey & getVerificationKey & verificationKeyHash & addressFromPaymentKeyHash nid
-  let state0 = prevState
+  let nid = cfgNetworkId coreConfig
+      signingKeyAddress = signingKey & getVerificationKey & verificationKeyHash & addressFromPaymentKeyHash nid
+      state0 = initialState
       rollupState0 = stateToRollupState state0
 
   Prelude.putStrLn "Generating setup parameters (this may take a while)..."

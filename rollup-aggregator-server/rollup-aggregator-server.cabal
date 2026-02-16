@@ -106,13 +106,14 @@ test-suite rollup-aggregator-server-tests
   ghc-options:
     -threaded
     "-with-rtsopts=-A128M -AL256m -qb0 -N -I0"
+
   other-modules:
     ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd
     ZkFold.Cardano.Rollup.Aggregator.Test.Validation
 
   build-depends:
-    atlas-cardano,
     aeson,
+    atlas-cardano,
     base,
     bytestring,
     mtl,
@@ -134,3 +135,22 @@ executable rollup-aggregator-server
     base,
     optparse-applicative,
     rollup-aggregator-server,
+
+executable rollup-seed
+  import: common
+  main-is: Seed.hs
+  hs-source-dirs: scripts
+  build-depends:
+    aeson,
+    atlas-cardano,
+    base,
+    bytestring,
+    directory,
+    filepath,
+    mtl,
+    optparse-applicative,
+    rollup-aggregator-server,
+    rollup-offchain-cardano-api,
+    symbolic-base,
+    symbolic-ledger,
+    yaml,

@@ -1,6 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware (
   exceptionHandler,
   errorJsonWrapMiddleware,

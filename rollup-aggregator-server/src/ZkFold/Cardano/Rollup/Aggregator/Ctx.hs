@@ -1,5 +1,3 @@
-{-# LANGUAGE TypeOperators #-}
-
 module ZkFold.Cardano.Rollup.Aggregator.Ctx (
   -- * Server Context
   Ctx (..),
@@ -22,6 +20,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Ctx (
 
 import Control.Concurrent.STM (TQueue, TVar)
 import Control.Monad.Reader (ReaderT (..))
+import GHC.TypeNats (type (+))
 import GeniusYield.Imports (HasCallStack, Identity (..), coerce)
 import GeniusYield.Transaction (GYCoinSelectionStrategy (..))
 import GeniusYield.TxBuilder
@@ -37,16 +36,15 @@ import GeniusYield.Types (
   gyLogInfo,
   gyLogWarning,
  )
+import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig)
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo)
-import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Protocol.NonInteractiveProof (TrustedSetup)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret)
 import ZkFold.Symbolic.Ledger.Circuit.Compile (LedgerCircuit, LedgerCircuitGates)
 import ZkFold.Symbolic.Ledger.Types
-import GHC.TypeNats (type (+))
 
 -- | Server context containing all shared state and configuration.
 data Ctx = Ctx

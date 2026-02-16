@@ -94,23 +94,3 @@ test-suite rollup-offchain-cardano-api-tests
     symbolic-ledger,
     tasty,
     tasty-hunit,
-
-executable rollup-seed
-  import: common
-  hs-source-dirs: app
-  main-is: Main.hs
-  build-depends:
-    aeson,
-    atlas-cardano,
-    base,
-    bytestring,
-    directory,
-    filepath,
-    mtl,
-    optparse-applicative,
-    rollup-offchain-cardano-api,
-    symbolic-base,
-    symbolic-ledger,
-    text,
-    yaml,
-    zkfold-cardano,

@@ -1,5 +1,3 @@
-{-# LANGUAGE TypeApplications #-}
-
 module ZkFold.Cardano.Rollup.Aggregator.Test.Validation (validationTests) where
 
 import Data.ByteString qualified as BS

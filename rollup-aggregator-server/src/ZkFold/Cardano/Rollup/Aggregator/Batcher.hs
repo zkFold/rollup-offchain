@@ -1,12 +1,10 @@
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators #-}
-
 module ZkFold.Cardano.Rollup.Aggregator.Batcher (
   initBatcherState,
   startBatcher,
   enqueueTx,
   processBatch,
   drainQueue,
+  initialState,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -95,16 +93,21 @@ initBatcherState = do
       proverSecret = PlonkupProverSecret (pure zero)
   pure (queue, stateVar, utxoVar, ts, circuit, proverSecret)
  where
-  emptyTree = SymMerkle.fromLeaves (pure (nullUTxOHash @A @I))
-  initialState =
-    State
-      { sPreviousStateHash = zero
-      , sUTxO = emptyTree
-      , sLength = zero
-      , sBridgeIn = hash (Comp1 (pure (nullOutput @A @I)))
-      , sBridgeOut = hash (Comp1 (pure (nullOutput @A @I)))
-      }
+  initialUtxoPreimage ∷ Vector 2 (UTxO A I)
   initialUtxoPreimage = pure (nullUTxO @A @I)
+
+emptyTree ∷ SymMerkle.MerkleTree Ud I
+emptyTree = SymMerkle.fromLeaves (pure (nullUTxOHash @A @I))
+
+initialState ∷ State Bi Bo Ud A I
+initialState =
+  State
+    { sPreviousStateHash = zero
+    , sUTxO = emptyTree
+    , sLength = zero
+    , sBridgeIn = hash (Comp1 (pure (nullOutput @A @I)))
+    , sBridgeOut = hash (Comp1 (pure (nullOutput @A @I)))
+    }
 
 enqueueTx ∷ Ctx → QueuedTx → IO ()
 enqueueTx Ctx {..} queued = atomically $ writeTQueue ctxBatchQueue queued
