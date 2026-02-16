@@ -93,7 +93,6 @@ initBatcherState = do
       proverSecret = PlonkupProverSecret (pure zero)
   pure (queue, stateVar, utxoVar, ts, circuit, proverSecret)
  where
-  initialUtxoPreimage ∷ Vector 2 (UTxO A I)
   initialUtxoPreimage = pure (nullUTxO @A @I)
 
 emptyTree ∷ SymMerkle.MerkleTree Ud I
