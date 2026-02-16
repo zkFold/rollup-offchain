@@ -1,16 +1,12 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators #-}
-
 module ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd (endToEndTests) where
 
 import Control.Concurrent.STM (atomically)
 import Control.Monad.Reader (runReaderT)
-import GHC.Generics ((:.:) (..))
-import ZkFold.Data.Vector (fromVector)
-import GeniusYield.Test.FakeCoin (FakeCoin (..), fakePolicy, fakeValue)
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as BSL
+import Data.Maybe (fromMaybe)
+import GHC.Generics ((:.:) (..))
+import GeniusYield.Test.FakeCoin (FakeCoin (..), fakePolicy, fakeValue)
 import GeniusYield.Test.Privnet.Ctx (
   ctxNetworkId,
   ctxProviders,
@@ -23,8 +19,8 @@ import GeniusYield.Test.Privnet.Ctx (
 import GeniusYield.Test.Privnet.Setup (Setup, withSetup)
 import GeniusYield.TxBuilder (buildTxBody, mustMint, signAndSubmitConfirmed, userAddr, userPaymentSKey', utxosAtAddress)
 import GeniusYield.Types (
-  GYBuildScript (GYBuildPlutusScript),
   GYBuildPlutusScript (GYBuildPlutusScriptInlined),
+  GYBuildScript (GYBuildPlutusScript),
   GYSomePaymentSigningKey (AGYPaymentSigningKey),
   PlutusVersion (PlutusV2),
   addressToBech32,
@@ -50,15 +46,15 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
  )
 import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
+import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
-import Data.Maybe (fromMaybe)
 
 endToEndTests ∷ Setup → TestTree
 endToEndTests setup =
   withResource
     ( do
         (queue, stateVar, utxoVar, ts, circuit, proverSecret) ← initBatcherState
-        setupBytesJson <- BSL.readFile "test/data/setup-bytes.json"
+        setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
         let setupBytes = fromMaybe undefined (Aeson.decode setupBytesJson)
         pure (queue, stateVar, utxoVar, ts, circuit, proverSecret, setupBytes)
     )
@@ -73,13 +69,15 @@ endToEndTests setup =
             let fundUser = ctxUserF privCtx
                 rollupState0 = stateToRollupState Ex3.prevState
 
-            (buildInfo, txBodySeed) ← ctxRunBuilder privCtx fundUser $
-              seedRollup setupBytes 1 1 2 Nothing rollupState0
+            (buildInfo, txBodySeed) ←
+              ctxRunBuilder privCtx fundUser $
+                seedRollup setupBytes 1 1 2 Nothing rollupState0
             tidSeed ← ctxRun privCtx fundUser $ signAndSubmitConfirmed txBodySeed
             info $ "Seed rollup: " <> show tidSeed
 
-            txBodyRegStake ← ctxRunBuilder privCtx fundUser $
-              runReaderT (registerRollupStake >>= buildTxBody) buildInfo
+            txBodyRegStake ←
+              ctxRunBuilder privCtx fundUser $
+                runReaderT (registerRollupStake >>= buildTxBody) buildInfo
             tidRegStake ← ctxRun privCtx fundUser $ signAndSubmitConfirmed txBodyRegStake
             info $ "Register stake: " <> show tidRegStake
 
@@ -140,7 +138,7 @@ endToEndTests setup =
             let strReq1 =
                   SubmitTxRequest
                     { strTransaction = Ex3.tx1
-                    , strSignatures = perTxSigs !! 0
+                    , strSignatures = head perTxSigs
                     , strBridgeOuts = []
                     }
             SubmitTxResponse status1 ← handleSubmitTx aggCtx strReq1
@@ -166,12 +164,15 @@ endToEndTests setup =
                 info $ "Batch submitted: " <> show tid
 
             -- tx3: 1 bridge-out (5 ADA + 25 asset2 to bridge-out address)
-            let bridgeOutAddr = addressToBech32 $ unsafeAddressFromText "addr_test1qpxsldf6hmp5vtdhhwzukm8x5q0m9t2xh8cftx8s6a43vll3t8hyc5syfx9lltq9dgr2xdkvwahr9humhpa9tae2jcjsxpxw2h"
+            let bridgeOutAddr =
+                  addressToBech32 $
+                    unsafeAddressFromText
+                      "addr_test1qpxsldf6hmp5vtdhhwzukm8x5q0m9t2xh8cftx8s6a43vll3t8hyc5syfx9lltq9dgr2xdkvwahr9humhpa9tae2jcjsxpxw2h"
                 bridgeOutValue = valueFromLovelace 5_000_000 <> fakeValue asset2 25_000_000
                 strReq3 =
                   SubmitTxRequest
                     { strTransaction = Ex3.tx3
-                    , strSignatures = perTxSigs2 !! 0
+                    , strSignatures = head perTxSigs2
                     , strBridgeOuts = [(bridgeOutValue, bridgeOutAddr)]
                     }
             SubmitTxResponse status3 ← handleSubmitTx aggCtx strReq3

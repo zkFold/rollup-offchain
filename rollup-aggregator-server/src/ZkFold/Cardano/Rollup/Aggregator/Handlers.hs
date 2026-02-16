@@ -25,9 +25,8 @@ import GeniusYield.Types (
   gySubmitTx,
   unsignedTx,
   valueToList,
-  valueToPlutus,
  )
-import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenValue)
+import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..))
 import PlutusLedgerApi.V1.Value qualified as Plutus
 import Servant (ServerError (..), ServerT, err400, (:<|>) (..))
 import ZkFold.Algebra.Class (fromConstant, one)

@@ -94,8 +94,8 @@ instance ToSchema SubmitTxRequest where
 type SubmitTxResPrefix ∷ Symbol
 type SubmitTxResPrefix = "str"
 
-data SubmitTxResponse = SubmitTxResponse
-  { strStatus ∷ !Text
+newtype SubmitTxResponse = SubmitTxResponse
+  { strStatus ∷ Text
   }
   deriving stock Generic
   deriving
@@ -143,8 +143,8 @@ instance ToSchema BridgeInRequest where
 type BridgeInResPrefix ∷ Symbol
 type BridgeInResPrefix = "bir"
 
-data BridgeInResponse = BridgeInResponse
-  { birTransaction ∷ !GYTx
+newtype BridgeInResponse = BridgeInResponse
+  { birTransaction ∷ GYTx
   }
   deriving stock Generic
   deriving
@@ -190,8 +190,8 @@ instance ToSchema SubmitL1TxRequest where
 type SubmitL1TxResPrefix ∷ Symbol
 type SubmitL1TxResPrefix = "sl1tr"
 
-data SubmitL1TxResponse = SubmitL1TxResponse
-  { sl1trTxId ∷ !GYTxId
+newtype SubmitL1TxResponse = SubmitL1TxResponse
+  { sl1trTxId ∷ GYTxId
   }
   deriving stock Generic
   deriving
