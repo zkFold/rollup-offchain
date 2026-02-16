@@ -116,6 +116,8 @@ cabal run rollup-seed -- \
   --max-output-assets 2
 ```
 
+Sample server execution command `cabal run rollup-aggregator-server -- serve -c secrets/config-preprod.yaml`.
+
 ### Tests
 
 We give an end-to-end test for verify behaviour of server endpoints, it is defined in [here](./rollup-aggregator-server/test/ZkFold/Cardano/Rollup/Aggregator/Test/EndToEnd.hs).
