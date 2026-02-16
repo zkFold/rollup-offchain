@@ -53,7 +53,7 @@ endToEndTests ∷ Setup → TestTree
 endToEndTests setup =
   withResource
     ( do
-        (queue, stateVar, utxoVar, ts, circuit, proverSecret) ← initBatcherState
+        (queue, stateVar, utxoVar, ts, circuit, proverSecret) ← initBatcherState Nothing
         setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
         let setupBytes = fromMaybe undefined (Aeson.decode setupBytesJson)
         pure (queue, stateVar, utxoVar, ts, circuit, proverSecret, setupBytes)
@@ -109,6 +109,7 @@ endToEndTests setup =
                     , AggCtx.ctxTrustedSetup = ts
                     , AggCtx.ctxLedgerCircuit = circuit
                     , AggCtx.ctxProverSecret = proverSecret
+                    , AggCtx.ctxStatePersistPath = Nothing
                     }
 
             -- Step 4: Bridge-in via handleBridgeIn (10 ADA + 50 asset2)

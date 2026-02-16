@@ -90,6 +90,8 @@ data ServerConfig = ServerConfig
   -- ^ Batch configuration.
   , scApiKey ∷ !(Confidential Text)
   -- ^ API key.
+  , scStatePersistPath ∷ !(Maybe FilePath)
+  -- ^ Optional file path for persisting ledger state across restarts.
   }
   deriving stock Generic
   deriving

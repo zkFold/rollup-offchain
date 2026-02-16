@@ -22,6 +22,7 @@ import System.TimeManager (TimeoutThread (..))
 import ZkFold.Cardano.Rollup.Aggregator.Api
 import ZkFold.Cardano.Rollup.Aggregator.Auth
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, startBatcher)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (loadState)
 import ZkFold.Cardano.Rollup.Aggregator.Config
 import ZkFold.Cardano.Rollup.Aggregator.Ctx
 import ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware
@@ -102,7 +103,17 @@ runServer mConfigPath = do
             , zkirbiRollupStakeValConfig = stakeValConfig
             }
 
-    (batchQueue, ledgerStateVar, utxoPreimageVar, trustedSetup, ledgerCircuit, proverSecret) ← initBatcherState
+    mPersistedState ← case scStatePersistPath serverConfig of
+      Just path → do
+        mState ← loadState path
+        case mState of
+          Just _ → logInfoS "Restored persisted ledger state from disk."
+          Nothing → logInfoS "No persisted state found, starting fresh."
+        pure mState
+      Nothing → do
+        logInfoS "State persistence not configured, starting fresh."
+        pure Nothing
+    (batchQueue, ledgerStateVar, utxoPreimageVar, trustedSetup, ledgerCircuit, proverSecret) ← initBatcherState mPersistedState
     let
       -- These are only meant to catch fatal exceptions, application thrown exceptions should be caught beforehand.
       onException ∷ req → SomeException → IO ()
@@ -145,6 +156,7 @@ runServer mConfigPath = do
           , ctxTrustedSetup = trustedSetup
           , ctxLedgerCircuit = ledgerCircuit
           , ctxProverSecret = proverSecret
+          , ctxStatePersistPath = scStatePersistPath serverConfig
           }
 
     -- TODO: We should make batcher separate & fault-tolerant to the server.

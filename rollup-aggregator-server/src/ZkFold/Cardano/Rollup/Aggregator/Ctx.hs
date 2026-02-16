@@ -72,6 +72,8 @@ data Ctx = Ctx
   -- ^ Ledger circuit.
   , ctxProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
   -- ^ Prover secret.
+  , ctxStatePersistPath ∷ !(Maybe FilePath)
+  -- ^ Optional file path for persisting ledger state.
   }
 
 logDebug ∷ HasCallStack ⇒ Ctx → String → IO ()
