@@ -25,7 +25,7 @@ import ZkFold.Symbolic.Ledger.Circuit.Compile (
   ledgerSetup,
   mkSetup,
  )
-import ZkFold.Symbolic.Ledger.Examples.One (
+import ZkFold.Symbolic.Ledger.Examples.Three (
   A,
   Bi,
   Bo,
@@ -111,7 +111,7 @@ runCommand RollupSeedCommand {..} = do
   let nid = cfgNetworkId coreConfig
   signingKey ∷ GYSigningKey 'GYKeyRolePayment ← readSigningKey rscSigningKey
   let signingKeyAddress = signingKey & getVerificationKey & verificationKeyHash & addressFromPaymentKeyHash nid
-  let state0 = lciPreviousState lci
+  let state0 = prevState
       rollupState0 = stateToRollupState state0
 
   Prelude.putStrLn "Generating setup parameters (this may take a while)..."
@@ -155,12 +155,3 @@ writeRollupConfig nid fp ZKInitializedRollupBuildInfo {..} = do
       , "maxBridgeOut" .= zkrsvcMaxBridgeOut zkirbiRollupStakeValConfig
       , "maxOutputAssets" .= zkrsvcMaxOutputAssets zkirbiRollupStakeValConfig
       ]
-
-lci ∷ LedgerContractInput Bi Bo Ud A Ixs Oxs TxCount I
-lci =
-  LedgerContractInput
-    { lciTransactionBatch = batch
-    , lciStateWitness = witness
-    , lciPreviousState = prevState
-    , lciNewState = newState
-    }
