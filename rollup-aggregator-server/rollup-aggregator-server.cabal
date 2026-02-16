@@ -1,0 +1,136 @@
+cabal-version: 3.12
+name: rollup-aggregator-server
+version: 0.1.0.0
+synopsis: Transaction aggregation server for zkFold L2 rollup
+description:
+  REST API server that receives L2 transactions from users,
+  aggregates them into batches, and submits to L1.
+
+license: MIT
+license-file: LICENSE
+author: zkFold Team
+maintainer: info@zkfold.io
+build-type: Simple
+extra-doc-files: CHANGELOG.md
+
+common common
+  default-language: GHC2021
+  default-extensions:
+    DataKinds
+    DeriveAnyClass
+    DerivingStrategies
+    DerivingVia
+    GADTs
+    LambdaCase
+    MultiWayIf
+    OverloadedStrings
+    RecordWildCards
+    RoleAnnotations
+    TemplateHaskell
+    TypeFamilies
+    TypeFamilyDependencies
+    UndecidableInstances
+    UnicodeSyntax
+    ViewPatterns
+
+  ghc-options:
+    -Wall
+    -Wincomplete-uni-patterns
+    -Wunused-packages
+
+library
+  import: common
+  exposed-modules:
+    ZkFold.Cardano.Rollup.Aggregator.Api
+    ZkFold.Cardano.Rollup.Aggregator.Auth
+    ZkFold.Cardano.Rollup.Aggregator.Batcher
+    ZkFold.Cardano.Rollup.Aggregator.Config
+    ZkFold.Cardano.Rollup.Aggregator.Ctx
+    ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware
+    ZkFold.Cardano.Rollup.Aggregator.Handlers
+    ZkFold.Cardano.Rollup.Aggregator.Options
+    ZkFold.Cardano.Rollup.Aggregator.Orphans
+    ZkFold.Cardano.Rollup.Aggregator.RequestLoggerMiddleware
+    ZkFold.Cardano.Rollup.Aggregator.Run
+    ZkFold.Cardano.Rollup.Aggregator.Types
+    ZkFold.Cardano.Rollup.Aggregator.Utils
+
+  other-modules:
+    PackageInfo_rollup_aggregator_server
+
+  autogen-modules:
+    PackageInfo_rollup_aggregator_server
+
+  build-depends:
+    aeson,
+    async,
+    atlas-cardano,
+    base >=4.18.2.1 && <5,
+    binary,
+    bytestring,
+    deriving-aeson,
+    envy,
+    fast-logger,
+    filepath,
+    http-types,
+    insert-ordered-containers,
+    lens,
+    mtl,
+    openapi3,
+    optparse-applicative,
+    plutus-ledger-api,
+    rollup-offchain-cardano-api,
+    servant-foreign,
+    servant-openapi3,
+    servant-server,
+    stm,
+    symbolic-base,
+    symbolic-ledger,
+    text,
+    time,
+    time-manager,
+    wai,
+    wai-cors,
+    wai-extra,
+    warp,
+    yaml,
+    zkfold-cardano-scripts-common,
+
+  hs-source-dirs: src
+
+test-suite rollup-aggregator-server-tests
+  import: common
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: test
+  ghc-options:
+    -threaded
+    "-with-rtsopts=-A128M -AL256m -qb0 -N -I0"
+  other-modules:
+    ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd
+    ZkFold.Cardano.Rollup.Aggregator.Test.Validation
+
+  build-depends:
+    atlas-cardano,
+    aeson,
+    base,
+    bytestring,
+    mtl,
+    plutus-ledger-api,
+    plutus-tx,
+    rollup-aggregator-server,
+    rollup-offchain-cardano-api,
+    stm,
+    symbolic-base,
+    symbolic-ledger,
+    tasty,
+    tasty-hunit,
+
+executable rollup-aggregator-server
+  import: common
+  main-is: Main.hs
+  hs-source-dirs: app
+  build-depends:
+    base,
+    optparse-applicative,
+    rollup-aggregator-server,
