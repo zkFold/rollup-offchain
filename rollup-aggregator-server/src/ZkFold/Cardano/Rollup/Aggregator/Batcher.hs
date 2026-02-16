@@ -50,6 +50,7 @@ import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenVal
 import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), saveState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
@@ -76,7 +77,8 @@ import ZkFold.Symbolic.Ledger.Types
 import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 initBatcherState
-  ∷ IO
+  ∷ Maybe PersistedState
+  → IO
       ( TQueue QueuedTx
       , TVar (State Bi Bo Ud A I)
       , TVar (Leaves Ud (UTxO A I))
@@ -84,10 +86,13 @@ initBatcherState
       , LedgerCircuit Bi Bo Ud A Ixs Oxs TxCount
       , PlonkupProverSecret BLS12_381_G1_JacobianPoint
       )
-initBatcherState = do
+initBatcherState mPersisted = do
   queue ← newTQueueIO
-  stateVar ← newTVarIO initialState
-  utxoVar ← newTVarIO initialUtxoPreimage
+  let (initSt, initUtxo) = case mPersisted of
+        Just (PersistedState st utxo) → (st, utxo)
+        Nothing → (initialState, initialUtxoPreimage)
+  stateVar ← newTVarIO initSt
+  utxoVar ← newTVarIO initUtxo
   ts ← powersOfTauSubset
   let circuit = ledgerCircuit @Bi @Bo @Ud @A @Ixs @Oxs @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
@@ -224,4 +229,5 @@ processBatch ctx@Ctx {..} queuedTxs = do
   atomically $ do
     writeTVar ctxLedgerStateVar newState
     writeTVar ctxUtxoPreimageVar newPreimage
+  saveState ctxStatePersistPath newState newPreimage
   pure submittedTxId

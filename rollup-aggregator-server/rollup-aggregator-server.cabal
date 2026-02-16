@@ -49,6 +49,7 @@ library
     ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware
     ZkFold.Cardano.Rollup.Aggregator.Handlers
     ZkFold.Cardano.Rollup.Aggregator.Options
+    ZkFold.Cardano.Rollup.Aggregator.Persistence
     ZkFold.Cardano.Rollup.Aggregator.Orphans
     ZkFold.Cardano.Rollup.Aggregator.RequestLoggerMiddleware
     ZkFold.Cardano.Rollup.Aggregator.Run
@@ -69,6 +70,7 @@ library
     binary,
     bytestring,
     deriving-aeson,
+    directory,
     envy,
     fast-logger,
     filepath,

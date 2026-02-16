@@ -71,6 +71,8 @@ batchConfig:
   maxTransactions: 2
   batchIntervalSeconds: 300
 apiKey: SERVER_API_KEY
+# File path where to persist rollup-state. When starting from initial state, this file can be empty.
+statePersistPath: rollup-state.json
 maxBridgeIn: 1
 maxBridgeOut: 1
 maxOutputAssets: 2
@@ -107,6 +109,7 @@ We provide a script to deploy rollup and this script would also generate relevan
 cabal run rollup-seed -- \
   --config secrets/maestro-config-preprod.json \
   --signing-key secrets/test-wallet.skey \
+  --state-file secrets/rollup-state.json \
   --output secrets/out.yaml \
   --max-bridge-in 1 \
   --max-bridge-out 1 \

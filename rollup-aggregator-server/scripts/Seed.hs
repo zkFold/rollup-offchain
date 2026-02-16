@@ -13,16 +13,9 @@ import Options.Applicative
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initialState)
-import ZkFold.Cardano.Rollup.Aggregator.Types (
-  A,
-  Bi,
-  Bo,
-  I,
-  Ixs,
-  Oxs,
-  TxCount,
-  Ud,
- )
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (saveState)
+import ZkFold.Cardano.Rollup.Aggregator.Types
+import ZkFold.Symbolic.Ledger.Types (nullUTxO)
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Cardano.Rollup.Types
@@ -47,6 +40,7 @@ data RollupSeedCommand = RollupSeedCommand
   { rscProviderConfig ∷ !FilePath
   , rscSigningKey ∷ !FilePath
   , rscOutput ∷ !FilePath
+  , rscStateFile ∷ !FilePath
   , rscMaxBridgeIn ∷ !Natural
   , rscMaxBridgeOut ∷ !Natural
   , rscMaxOutputAssets ∷ !Natural
@@ -72,6 +66,11 @@ parseRollupSeedCommand =
           <> metavar "OUTPUT"
           <> short 'o'
           <> help "Path of output YAML file."
+      )
+    <*> strOption
+      ( long "state-file"
+          <> metavar "STATE_FILE"
+          <> help "Path of initial state JSON file for server persistence."
       )
     <*> option
       auto
@@ -132,6 +131,11 @@ runCommand RollupSeedCommand {..} = do
     Prelude.putStrLn $ "Register stake transaction submitted: " <> show tidRegisterStake
 
     writeRollupConfig nid rscOutput initializedBuildInfo
+
+    let initialUtxoPreimage = pure (nullUTxO @A @I)
+    createDirectoryIfMissing True (takeDirectory rscStateFile)
+    saveState rscStateFile state0 initialUtxoPreimage
+    Prelude.putStrLn $ "Initial state written to: " <> rscStateFile
 
 writeRollupConfig ∷ GYNetworkId → FilePath → ZKInitializedRollupBuildInfo → IO ()
 writeRollupConfig nid fp ZKInitializedRollupBuildInfo {..} = do
