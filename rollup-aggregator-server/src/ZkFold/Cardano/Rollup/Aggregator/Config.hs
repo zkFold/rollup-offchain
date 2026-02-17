@@ -46,8 +46,8 @@ data MnemonicWalletDetails = MnemonicWalletDetails
 
 -- | Batch processing configuration.
 data BatchConfig = BatchConfig
-  { bcMaxTransactions ∷ !Natural
-  -- ^ Maximum transactions per batch.
+  { bcBatchTransactions ∷ !Natural
+  -- ^ Exact number of transactions per batch.
   , bcBatchIntervalSeconds ∷ !Natural
   -- ^ How often to create batches (in seconds).
   }

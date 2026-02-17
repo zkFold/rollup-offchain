@@ -102,7 +102,7 @@ endToEndTests setup =
                     , AggCtx.ctxSigningKey = (AGYPaymentSigningKey (userPaymentSKey' fundUser), userAddr fundUser)
                     , AggCtx.ctxCollateral = collateralRef
                     , AggCtx.ctxRollupBuildInfo = buildInfo
-                    , AggCtx.ctxBatchConfig = BatchConfig {bcMaxTransactions = 2, bcBatchIntervalSeconds = 60}
+                    , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
                     , AggCtx.ctxBatchQueue = queue
                     , AggCtx.ctxLedgerStateVar = stateVar
                     , AggCtx.ctxUtxoPreimageVar = utxoVar

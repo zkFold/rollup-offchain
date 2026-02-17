@@ -170,14 +170,28 @@ drainQueue q = do
     Nothing → pure []
     Just x → (x :) <$> drainQueue q
 
+-- | Take exactly @n@ items from the queue. If fewer than @n@ are available,
+-- put them all back and return 'Nothing'.
+takeExactly ∷ Natural → TQueue a → STM (Maybe [a])
+takeExactly n q = do
+  items ← drainQueue q
+  if fromIntegral (length items) >= n
+    then do
+      let (batch, rest) = splitAt (fromIntegral n) items
+      mapM_ (writeTQueue q) rest
+      pure (Just batch)
+    else do
+      mapM_ (writeTQueue q) items
+      pure Nothing
+
 startBatcher ∷ Ctx → IO ()
 startBatcher ctx@Ctx {..} = void . async . forever $ do
   let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
   threadDelay delayMicros
-  queued ← atomically $ drainQueue ctxBatchQueue
-  case queued of
-    [] → pure ()
-    _ → do
+  mQueued ← atomically $ takeExactly (bcBatchTransactions ctxBatchConfig) ctxBatchQueue
+  case mQueued of
+    Nothing → pure ()
+    Just queued → do
       result ← try $ processBatch ctx queued
       case result of
         Left (err ∷ SomeException) → gyLogError ctxProviders mempty $ "Batch processing failed: " <> show err
