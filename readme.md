@@ -68,7 +68,9 @@ wallet:
     # Payment address index.
     addrIx: 0
 batchConfig:
-  maxTransactions: 2
+  # Number of transactions to put in the batch.
+  batchTransactions: 2
+  # Periodic interval to process batch.
   batchIntervalSeconds: 300
 apiKey: SERVER_API_KEY
 # File path where to persist rollup-state. When starting from initial state, this file can be empty.
