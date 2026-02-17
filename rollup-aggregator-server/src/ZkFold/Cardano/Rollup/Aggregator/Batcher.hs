@@ -30,6 +30,7 @@ import Data.Maybe (catMaybes)
 import Data.Proxy (Proxy (..))
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.IsList (fromList)
+import GHC.Natural (Natural)
 import GHC.TypeNats (natVal, type (+))
 import GeniusYield.TxBuilder (buildTxBody, runGYTxMonadIO, signAndSubmitConfirmed, utxoDatum, utxosAtAddress)
 import GeniusYield.Types (
@@ -50,8 +51,8 @@ import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenVal
 import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), saveState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), saveState)
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
@@ -173,10 +174,10 @@ drainQueue q = do
 -- | Take exactly @n@ items from the queue. If fewer than @n@ are available,
 -- put them all back and return 'Nothing'.
 takeExactly ∷ Natural → TQueue a → STM (Maybe [a])
-takeExactly n q = go (fromIntegral n) []
+takeExactly n q = go n []
  where
   go 0 acc = pure (Just (reverse acc))
-  go remaining acc = do
+  go !remaining acc = do
     mx ← tryReadTQueue q
     case mx of
       Nothing → do
