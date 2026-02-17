@@ -37,6 +37,8 @@ common common
     -Wall
     -Wincomplete-uni-patterns
     -Wunused-packages
+    -threaded
+    "-with-rtsopts=-A128M -AL256m -qb0 -N"
 
 library
   import: common
@@ -47,8 +49,8 @@ library
     ZkFold.Cardano.Rollup.Aggregator.Config
     ZkFold.Cardano.Rollup.Aggregator.Ctx
     ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware
-    ZkFold.Cardano.Rollup.Aggregator.Handlers
     ZkFold.Cardano.Rollup.Aggregator.Options
+    ZkFold.Cardano.Rollup.Aggregator.Persistence
     ZkFold.Cardano.Rollup.Aggregator.Persistence
     ZkFold.Cardano.Rollup.Aggregator.Orphans
     ZkFold.Cardano.Rollup.Aggregator.RequestLoggerMiddleware
@@ -106,8 +108,7 @@ test-suite rollup-aggregator-server-tests
   main-is: Main.hs
   hs-source-dirs: test
   ghc-options:
-    -threaded
-    "-with-rtsopts=-A128M -AL256m -qb0 -N -I0"
+    "-with-rtsopts=-I0"
 
   other-modules:
     ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd
