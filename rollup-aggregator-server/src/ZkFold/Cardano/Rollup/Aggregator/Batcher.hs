@@ -3,7 +3,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Batcher (
   startBatcher,
   enqueueTx,
   processBatch,
-  drainQueue,
+  takeExactly,
   initialState,
 ) where
 
@@ -30,6 +30,7 @@ import Data.Maybe (catMaybes)
 import Data.Proxy (Proxy (..))
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.IsList (fromList)
+import GHC.Natural (Natural)
 import GHC.TypeNats (natVal, type (+))
 import GeniusYield.TxBuilder (buildTxBody, runGYTxMonadIO, signAndSubmitConfirmed, utxoDatum, utxosAtAddress)
 import GeniusYield.Types (
@@ -50,8 +51,8 @@ import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenVal
 import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), saveState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), saveState)
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
@@ -162,22 +163,28 @@ toSymbolicOutput addr val =
       , assetQuantity = fromConstant amt
       }
 
--- | Drain all available items from a 'TQueue'.
-drainQueue ∷ TQueue a → STM [a]
-drainQueue q = do
-  mx ← tryReadTQueue q
-  case mx of
-    Nothing → pure []
-    Just x → (x :) <$> drainQueue q
+-- | Take exactly @n@ items from the queue. If fewer than @n@ are available,
+-- put them all back and return 'Nothing'.
+takeExactly ∷ Natural → TQueue a → STM (Maybe [a])
+takeExactly n q = go n []
+ where
+  go 0 acc = pure (Just (reverse acc))
+  go !remaining acc = do
+    mx ← tryReadTQueue q
+    case mx of
+      Nothing → do
+        mapM_ (writeTQueue q) (reverse acc)
+        pure Nothing
+      Just x → go (remaining - 1) (x : acc)
 
 startBatcher ∷ Ctx → IO ()
 startBatcher ctx@Ctx {..} = void . async . forever $ do
   let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
   threadDelay delayMicros
-  queued ← atomically $ drainQueue ctxBatchQueue
-  case queued of
-    [] → pure ()
-    _ → do
+  mQueued ← atomically $ takeExactly (bcBatchTransactions ctxBatchConfig) ctxBatchQueue
+  case mQueued of
+    Nothing → pure ()
+    Just queued → do
       result ← try $ processBatch ctx queued
       case result of
         Left (err ∷ SomeException) → gyLogError ctxProviders mempty $ "Batch processing failed: " <> show err

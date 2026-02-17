@@ -4,8 +4,10 @@ import Control.Concurrent.STM (atomically)
 import Control.Monad.Reader (runReaderT)
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as BSL
+import Data.Data (Proxy (..))
 import Data.Maybe (fromMaybe)
 import GHC.Generics ((:.:) (..))
+import GHC.TypeNats (natVal)
 import GeniusYield.Test.FakeCoin (FakeCoin (..), fakePolicy, fakeValue)
 import GeniusYield.Test.Privnet.Ctx (
   ctxNetworkId,
@@ -34,7 +36,7 @@ import GeniusYield.Types (
  )
 import Test.Tasty (TestTree, testGroup, withResource)
 import Test.Tasty.HUnit (assertEqual, assertFailure, testCaseSteps)
-import ZkFold.Cardano.Rollup.Aggregator.Batcher (drainQueue, initBatcherState, processBatch)
+import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, processBatch, takeExactly)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx qualified as AggCtx
 import ZkFold.Cardano.Rollup.Aggregator.Handlers (handleBridgeIn, handleSubmitTx)
@@ -102,7 +104,7 @@ endToEndTests setup =
                     , AggCtx.ctxSigningKey = (AGYPaymentSigningKey (userPaymentSKey' fundUser), userAddr fundUser)
                     , AggCtx.ctxCollateral = collateralRef
                     , AggCtx.ctxRollupBuildInfo = buildInfo
-                    , AggCtx.ctxBatchConfig = BatchConfig {bcMaxTransactions = 2, bcBatchIntervalSeconds = 60}
+                    , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
                     , AggCtx.ctxBatchQueue = queue
                     , AggCtx.ctxLedgerStateVar = stateVar
                     , AggCtx.ctxUtxoPreimageVar = utxoVar
@@ -157,11 +159,12 @@ endToEndTests setup =
             assertEqual "L2 tx2 queued" "queued" status2
             info "L2 tx2 queued"
 
-            queuedTxs ← atomically $ drainQueue queue
+            let txCount = natVal (Proxy @Ex3.TxCount)
+            queuedTxs ← atomically $ takeExactly txCount queue
             case queuedTxs of
-              [] → assertFailure "No transactions in batch queue"
-              _ → do
-                tid ← processBatch aggCtx queuedTxs
+              Nothing → assertFailure "No transactions in batch queue"
+              Just txs → do
+                tid ← processBatch aggCtx txs
                 info $ "Batch submitted: " <> show tid
 
             -- tx3: 1 bridge-out (5 ADA + 25 asset2 to bridge-out address)
@@ -191,11 +194,11 @@ endToEndTests setup =
             assertEqual "L2 tx4 queued" "queued" status4
             info "L2 tx4 queued"
 
-            queuedTxs2 ← atomically $ drainQueue queue
+            queuedTxs2 ← atomically $ takeExactly txCount queue
             case queuedTxs2 of
-              [] → assertFailure "No transactions in batch queue"
-              _ → do
-                tid ← processBatch aggCtx queuedTxs2
+              Nothing → assertFailure "No transactions in batch queue"
+              Just txs → do
+                tid ← processBatch aggCtx txs
                 info $ "Batch submitted: " <> show tid
                 info "End-to-end test passed"
         ]
