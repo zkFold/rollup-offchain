@@ -3,7 +3,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Batcher (
   startBatcher,
   enqueueTx,
   processBatch,
-  drainQueue,
+  takeExactly,
   initialState,
 ) where
 
@@ -162,14 +162,6 @@ toSymbolicOutput addr val =
       , assetName = fromConstant (byteStringToInteger' (unTokenName tn))
       , assetQuantity = fromConstant amt
       }
-
--- | Drain all available items from a 'TQueue'.
-drainQueue ∷ TQueue a → STM [a]
-drainQueue q = do
-  mx ← tryReadTQueue q
-  case mx of
-    Nothing → pure []
-    Just x → (x :) <$> drainQueue q
 
 -- | Take exactly @n@ items from the queue. If fewer than @n@ are available,
 -- put them all back and return 'Nothing'.
