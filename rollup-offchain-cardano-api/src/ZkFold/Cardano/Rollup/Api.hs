@@ -189,18 +189,20 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
   eithers ← forM rollupUTxOsWithoutState $ \u → do
     datumTuple ← utxoDatum @_ @BridgeUtxoStatus u
     case datumTuple of
-      Right (_, _, datum) →
-        pure $ case datum of
-          BridgeInInitial addr → Left (u, addr)
-          _ → Right u
+      Right (_, _, BridgeInInitial addr) → pure $ Left (u, addr)
       _ → pure $ Right u
 
   let (initials, others) = partitionEithers eithers
 
-      initialBridgeIns = map (bimap utxoValue fromConstant) initials
+      -- Match provided bridge-ins against on-chain BridgeInInitial UTxOs by L2 address and value.
+      provided = map (\(val, fe) → (feToInteger fe, val)) bridgeIns'
+      matchedInitials = map fst $ filter (\(utxo, addr) → (addr, utxoValue utxo) `elem` provided) initials
+
+      -- Only spend matched BridgeInInitial UTxOs + other (non-BridgeInInitial) UTxOs.
+      utxosToSpend = matchedInitials <> others
 
       -- We reverse the given list as in plutus validator, when it traverses the outputs, it adds the later item in list to the beginning of it's own internal list.
-      bridgeIns = reverse (bridgeIns' <> initialBridgeIns)
+      bridgeIns = reverse bridgeIns'
       bridgeOuts = reverse bridgeOuts'
   gyLogDebug' mempty $ "Bridge ins: " <> show bridgeIns
   gyLogDebug' mempty $ "Bridge outs: " <> show bridgeOuts
@@ -290,7 +292,7 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
                 , gyTxInWitness = GYTxInWitnessScript (GYBuildPlutusScriptReference zkirbiRollupRef zkirbiRollup) Nothing unitRedeemer
                 }
         )
-        rollupUTxOsWithoutState
+        utxosToSpend
       <> mustHaveWithdrawal
         ( GYTxWdrl
             { gyTxWdrlStakeAddress = stakeAddr

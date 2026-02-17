@@ -230,7 +230,8 @@ processBatch ctx@Ctx {..} queuedTxs = do
       (snd ctxSigningKey)
       collateral
       $ do
-        skel ← runReaderT (updateRollupState rollupState [] allBridgeOuts proofPlutus) ctxRollupBuildInfo
+        let bridgeInsForL1 = map (\(addr, val) → (val, fromConstant addr)) bridgeInData
+        skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus) ctxRollupBuildInfo
         body ← buildTxBody skel
         signAndSubmitConfirmed body
   atomically $ do

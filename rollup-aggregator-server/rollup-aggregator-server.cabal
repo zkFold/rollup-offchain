@@ -49,10 +49,10 @@ library
     ZkFold.Cardano.Rollup.Aggregator.Config
     ZkFold.Cardano.Rollup.Aggregator.Ctx
     ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware
+    ZkFold.Cardano.Rollup.Aggregator.Handlers
     ZkFold.Cardano.Rollup.Aggregator.Options
-    ZkFold.Cardano.Rollup.Aggregator.Persistence
-    ZkFold.Cardano.Rollup.Aggregator.Persistence
     ZkFold.Cardano.Rollup.Aggregator.Orphans
+    ZkFold.Cardano.Rollup.Aggregator.Persistence
     ZkFold.Cardano.Rollup.Aggregator.RequestLoggerMiddleware
     ZkFold.Cardano.Rollup.Aggregator.Run
     ZkFold.Cardano.Rollup.Aggregator.Types
@@ -108,7 +108,7 @@ test-suite rollup-aggregator-server-tests
   main-is: Main.hs
   hs-source-dirs: test
   ghc-options:
-    "-with-rtsopts=-I0"
+    -with-rtsopts=-I0
 
   other-modules:
     ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd
