@@ -173,16 +173,16 @@ drainQueue q = do
 -- | Take exactly @n@ items from the queue. If fewer than @n@ are available,
 -- put them all back and return 'Nothing'.
 takeExactly ∷ Natural → TQueue a → STM (Maybe [a])
-takeExactly n q = do
-  items ← drainQueue q
-  if fromIntegral (length items) >= n
-    then do
-      let (batch, rest) = splitAt (fromIntegral n) items
-      mapM_ (writeTQueue q) rest
-      pure (Just batch)
-    else do
-      mapM_ (writeTQueue q) items
-      pure Nothing
+takeExactly n q = go (fromIntegral n) []
+ where
+  go 0 acc = pure (Just (reverse acc))
+  go remaining acc = do
+    mx ← tryReadTQueue q
+    case mx of
+      Nothing → do
+        mapM_ (writeTQueue q) (reverse acc)
+        pure Nothing
+      Just x → go (remaining - 1) (x : acc)
 
 startBatcher ∷ Ctx → IO ()
 startBatcher ctx@Ctx {..} = void . async . forever $ do
