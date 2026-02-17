@@ -3,8 +3,10 @@ module ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd (endToEndTests) where
 import Control.Concurrent.STM (atomically)
 import Control.Monad.Reader (runReaderT)
 import Data.Aeson qualified as Aeson
+import Data.ByteString (ByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Data (Proxy (..))
+import Data.Function ((&))
 import Data.Maybe (fromMaybe)
 import GHC.Generics ((:.:) (..))
 import GHC.TypeNats (natVal)
@@ -49,6 +51,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
 import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Data.Vector (fromVector)
+import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup)
 import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
 
 endToEndTests ∷ Setup → TestTree
@@ -57,7 +60,10 @@ endToEndTests setup =
     ( do
         (queue, stateVar, utxoVar, ts, circuit, proverSecret) ← initBatcherState Nothing
         setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
-        let setupBytes = fromMaybe undefined (Aeson.decode setupBytesJson)
+        let setupBytes =
+              -- ledgerSetup @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.Ixs @Ex3.Oxs @Ex3.TxCount @Ex3.I ts circuit
+              --   & mkSetup
+              fromMaybe undefined (Aeson.decode setupBytesJson)
         pure (queue, stateVar, utxoVar, ts, circuit, proverSecret, setupBytes)
     )
     (\_ → pure ())
@@ -66,7 +72,7 @@ endToEndTests setup =
         "End-to-end tests"
         [ testCaseSteps "Bridge-in + L2 txs + batch processing" $ \info → withSetup info setup $ \privCtx → do
             (queue, stateVar, utxoVar, ts, circuit, proverSecret, setupBytes) ← getResources
-            -- BSL.writeFile "setupBytes" (Aeson.encode setupBytes)
+            -- BSL.writeFile "rollup-aggregator-server/test/data/setup-bytes.json" (Aeson.encode setupBytes)
             -- Step 1: Admin setup — seed rollup and register stake validator
             let fundUser = ctxUserF privCtx
                 rollupState0 = stateToRollupState Ex3.prevState
