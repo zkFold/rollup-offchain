@@ -312,7 +312,7 @@ paths:
         '400':
           description: Invalid `address`
       tags:
-      - L2 queries
+      - L2 utxo queries
 tags:
 - description: Endpoint to check if the server is healthy.
   name: Settings
@@ -322,5 +322,5 @@ tags:
   name: Bridge
 - description: Submit L1 transactions.
   name: L1 transactions
-- description: Query L2 ledger state.
-  name: L2 queries
+- description: Query L2 UTxO state.
+  name: L2 utxo queries
