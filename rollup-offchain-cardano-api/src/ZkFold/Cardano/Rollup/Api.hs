@@ -5,6 +5,7 @@ module ZkFold.Cardano.Rollup.Api (
   updateRollupState,
   bridgeIn,
   bridgeIn',
+  utxosAtL2Address,
   byteStringToInteger',
   addressToBS,
 ) where
@@ -19,6 +20,7 @@ import GeniusYield.Api.TestTokens (mintTestTokens)
 import GeniusYield.Examples.Limbo (limboValidatorV2)
 import GeniusYield.TxBuilder
 import GeniusYield.Types
+import GHC.TypeNats (KnownNat)
 import ZkFold.Algebra.Class (FromConstant (..), ToConstant (toConstant))
 import ZkFold.Cardano.OnChain.Plonkup.Data (ProofBytes)
 import ZkFold.Cardano.Rollup.Constants
@@ -31,7 +33,10 @@ import ZkFold.Cardano.UPLC.RollupSimple.Types (
  )
 import ZkFold.Cardano.UPLC.RollupSimple.Utils (addressToBS, byteStringToInteger')
 import ZkFold.Protocol.Plonkup.OffChain.Cardano
+import ZkFold.Data.MerkleTree (Leaves, MerkleTreeSize)
+import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Ledger.Types (UTxO (..), Output (..), nullUTxO)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 
 -- | Get the rollup address.
@@ -330,6 +335,16 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
                 )
             else mempty
          )
+
+-- | Query UTxOs at a given L2 address from the UTxO preimage.
+utxosAtL2Address
+  ∷ (KnownNat a, KnownNat (MerkleTreeSize ud))
+  ⇒ FieldElement RollupBFInterpreter
+  → Leaves ud (UTxO a RollupBFInterpreter)
+  → [UTxO a RollupBFInterpreter]
+utxosAtL2Address addr =
+  filter (\utxo → oAddress (uOutput utxo) == addr && utxo /= nullUTxO)
+    . fromVector
 
 feToInteger ∷ FieldElement RollupBFInterpreter → Integer
 feToInteger = fromIntegral @Natural @Integer . toConstant . toConstant

@@ -28,6 +28,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   SubmitL1TxResponse,
   SubmitTxRequest,
   SubmitTxResponse,
+  QueryL2UtxosResponse,
  )
 
 -- | Health check endpoint.
@@ -40,12 +41,16 @@ type BridgeInAPI = "bridge" :> "in" :> ReqBody '[JSON] BridgeInRequest :> Post '
 
 type SubmitL1TxAPI = "l1" :> "tx" :> "submit" :> ReqBody '[JSON] SubmitL1TxRequest :> Post '[JSON] SubmitL1TxResponse
 
+-- | Query UTxOs at a given L2 address.
+type QueryL2UtxosAPI = "utxos" :> QueryParam' '[Required, Strict] "address" Integer :> Get '[JSON] QueryL2UtxosResponse
+
 -- | V0 API - combines all endpoints.
 type V0API =
   HealthAPI
     :<|> SubmitTxAPI
     :<|> BridgeInAPI
     :<|> SubmitL1TxAPI
+    :<|> QueryL2UtxosAPI
 
 -- | Aggregator API with version prefix.
 type AggregatorAPI = "v0" :> V0API
@@ -99,3 +104,6 @@ aggregatorAPIOpenApi =
     & OpenApi.applyTagsFor
       (subOperations (Proxy ∷ Proxy (V0 :> SubmitL1TxAPI)) (Proxy ∷ Proxy AggregatorAPI))
       ["L1 transactions" & OpenApi.description ?~ "Submit L1 transactions."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> QueryL2UtxosAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["L2 queries" & OpenApi.description ?~ "Query L2 ledger state."]

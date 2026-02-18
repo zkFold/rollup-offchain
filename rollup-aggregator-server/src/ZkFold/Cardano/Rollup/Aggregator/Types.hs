@@ -19,6 +19,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInResponse (..),
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
+  QueryL2UtxosResponse (..),
 ) where
 
 import Control.Lens ((?~))
@@ -209,3 +210,26 @@ instance ToSchema SubmitL1TxResponse where
     return $
       schema
         & OpenApi.schema . OpenApi.description ?~ "Response to the L1 transaction submission"
+
+type QueryL2UtxosResPrefix ∷ Symbol
+type QueryL2UtxosResPrefix = "qlur"
+
+newtype QueryL2UtxosResponse = QueryL2UtxosResponse
+  { qlurUtxos ∷ [UTxO A I]
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix QueryL2UtxosResPrefix, LowerFirst]] QueryL2UtxosResponse
+
+instance ToSchema QueryL2UtxosResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @QueryL2UtxosResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Response containing UTxOs at the given L2 address"
