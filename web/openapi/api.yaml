@@ -114,6 +114,16 @@ components:
       - oAddress
       - oAssets
       type: object
+    QueryL2UtxosResponse:
+      description: Response containing UTxOs at the given L2 address
+      properties:
+        utxos:
+          items:
+            $ref: '#/components/schemas/UTxO_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          type: array
+      required:
+      - utxos
+      type: object
     SubmitL1TxRequest:
       description: Request parameters to submit the L1 transaction
       properties:
@@ -192,6 +202,16 @@ components:
       required:
       - inputs
       - outputs
+      type: object
+    UTxO_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
+      properties:
+        uOutput:
+          $ref: '#/components/schemas/Output_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+        uRef:
+          $ref: '#/components/schemas/OutputRef_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+      required:
+      - uRef
+      - uOutput
       type: object
 info:
   contact:
@@ -274,6 +294,25 @@ paths:
           description: Invalid `body`
       tags:
       - Transactions
+  /v0/utxos:
+    get:
+      parameters:
+      - in: query
+        name: address
+        required: true
+        schema:
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/QueryL2UtxosResponse'
+          description: ''
+        '400':
+          description: Invalid `address`
+      tags:
+      - L2 queries
 tags:
 - description: Endpoint to check if the server is healthy.
   name: Settings
@@ -283,3 +322,5 @@ tags:
   name: Bridge
 - description: Submit L1 transactions.
   name: L1 transactions
+- description: Query L2 ledger state.
+  name: L2 queries
