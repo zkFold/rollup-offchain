@@ -7,11 +7,13 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
   handleSubmitTx,
   handleBridgeIn,
   handleSubmitL1Tx,
+  handleQueryL2Utxos,
 
   -- * Validation (exported for testing)
   matchesBridgeOutValue,
 ) where
 
+import Control.Concurrent.STM (readTVarIO)
 import Control.Exception (throwIO)
 import Data.Bifunctor (Bifunctor (..))
 import GHC.Generics ((:*:) (..), (:.:) (..))
@@ -40,6 +42,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
   I,
+  QueryL2UtxosResponse (..),
   QueuedTx (..),
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
@@ -49,6 +52,8 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.Bool (fromBool)
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..))
 import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
 
@@ -59,6 +64,7 @@ aggregatorServer ctx =
     :<|> handleSubmitTx ctx
     :<|> handleBridgeIn ctx
     :<|> handleSubmitL1Tx ctx
+    :<|> handleQueryL2Utxos ctx
 
 -- | Handle health check requests.
 handleHealth ∷ Ctx → IO ()
@@ -128,3 +134,10 @@ handleSubmitL1Tx ctx SubmitL1TxRequest {..} = do
   let txWithWitness = appendWitnessGYTx sl1trWitness sl1trTransaction
   txId ← gySubmitTx (ctxProviders ctx) txWithWitness
   pure $ SubmitL1TxResponse txId
+
+-- | Handle L2 UTxO query by address.
+handleQueryL2Utxos ∷ Ctx → FieldElement RollupBFInterpreter → IO QueryL2UtxosResponse
+handleQueryL2Utxos Ctx {..} l2Addr = do
+  utxoPreimage ← readTVarIO ctxUtxoPreimageVar
+  let matching = utxosAtL2Address l2Addr utxoPreimage
+  pure $ QueryL2UtxosResponse matching

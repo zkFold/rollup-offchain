@@ -1,14 +1,16 @@
+{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
+
 module ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd (endToEndTests) where
 
 import Control.Concurrent.STM (atomically)
 import Control.Monad.Reader (runReaderT)
 import Data.Aeson qualified as Aeson
-import Data.ByteString (ByteString)
+-- import Data.ByteString (ByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Data (Proxy (..))
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
-import GHC.Generics ((:.:) (..))
+import GHC.Generics ((:.:) (..), type (:*:) (..))
 import GHC.TypeNats (natVal)
 import GeniusYield.Test.FakeCoin (FakeCoin (..), fakePolicy, fakeValue)
 import GeniusYield.Test.Privnet.Ctx (
@@ -31,7 +33,6 @@ import GeniusYield.Types (
   gySubmitTx,
   signGYTx,
   unitRedeemer,
-  unsafeAddressFromText,
   utxoRef,
   utxosToList,
   valueFromLovelace,
@@ -41,18 +42,20 @@ import Test.Tasty.HUnit (assertEqual, assertFailure, testCaseSteps)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, processBatch, takeExactly)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx qualified as AggCtx
-import ZkFold.Cardano.Rollup.Aggregator.Handlers (handleBridgeIn, handleSubmitTx)
+import ZkFold.Cardano.Rollup.Aggregator.Handlers (handleBridgeIn, handleQueryL2Utxos, handleSubmitTx)
 import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
+  QueryL2UtxosResponse (..),
   SubmitTxRequest (..),
   SubmitTxResponse (..),
  )
 import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Data.Vector (fromVector)
-import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup)
+-- import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup)
 import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
+import ZkFold.Symbolic.Ledger.Types (Output (..), Transaction (..), UTxO (..))
 
 endToEndTests ∷ Setup → TestTree
 endToEndTests setup =
@@ -173,11 +176,18 @@ endToEndTests setup =
                 tid ← processBatch aggCtx txs
                 info $ "Batch submitted: " <> show tid
 
+            -- Step 6b: Query L2 UTxOs after batch 1
+            -- After tx1+tx2: address has 5 ADA + 25 asset2, address2 has 5 ADA + 25 asset2
+            let [outTx3_1 :*: _, _] = Ex3.tx3 & outputs & unComp1 & fromVector
+            QueryL2UtxosResponse utxos1Addr ← handleQueryL2Utxos aggCtx Ex3.address
+            assertEqual "UTxO output at address after batch 1" [outTx3_1] (uOutput <$> utxos1Addr)
+
+            QueryL2UtxosResponse utxos1Addr2 ← handleQueryL2Utxos aggCtx Ex3.address2
+            assertEqual "UTxO output at address2 after batch 1" [outTx3_1 {oAddress = Ex3.address2}] (uOutput <$> utxos1Addr2)
+
             -- tx3: 1 bridge-out (5 ADA + 25 asset2 to bridge-out address)
             let bridgeOutAddr =
-                  addressToBech32 $
-                    unsafeAddressFromText
-                      "addr_test1qpxsldf6hmp5vtdhhwzukm8x5q0m9t2xh8cftx8s6a43vll3t8hyc5syfx9lltq9dgr2xdkvwahr9humhpa9tae2jcjsxpxw2h"
+                  "addr_test1qpxsldf6hmp5vtdhhwzukm8x5q0m9t2xh8cftx8s6a43vll3t8hyc5syfx9lltq9dgr2xdkvwahr9humhpa9tae2jcjsxpxw2h"
                 bridgeOutValue = valueFromLovelace 5_000_000 <> fakeValue asset2 25_000_000
                 strReq3 =
                   SubmitTxRequest
@@ -206,5 +216,14 @@ endToEndTests setup =
               Just txs → do
                 tid ← processBatch aggCtx txs
                 info $ "Batch submitted: " <> show tid
-                info "End-to-end test passed"
+
+            -- Step 8b: Query L2 UTxOs after batch 2
+            let [out1 :*: _, out2 :*: _] = Ex3.tx4 & outputs & unComp1 & fromVector
+            QueryL2UtxosResponse utxos2Addr ← handleQueryL2Utxos aggCtx Ex3.address
+            assertEqual "UTxO output at address after batch 2" [out1] (uOutput <$> utxos2Addr)
+
+            QueryL2UtxosResponse utxos2Addr2 ← handleQueryL2Utxos aggCtx Ex3.address2
+            assertEqual "UTxO output at address2 after batch 2" [out2] (uOutput <$> utxos2Addr2)
+
+            info "End-to-end test passed"
         ]
