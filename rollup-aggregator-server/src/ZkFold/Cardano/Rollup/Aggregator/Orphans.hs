@@ -10,6 +10,13 @@ import Servant
 import Servant.Foreign
 import Servant.OpenApi
 import ZkFold.Cardano.Rollup.Aggregator.Auth (APIKeyAuthProtect, apiKeyHeaderText)
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
+
+instance ToParamSchema (FieldElement RollupBFInterpreter) where
+  toParamSchema = undefined
+
+instance FromHttpApiData (FieldElement RollupBFInterpreter)
 
 instance HasOpenApi api ⇒ HasOpenApi (APIKeyAuthProtect :> api) where
   toOpenApi _ =

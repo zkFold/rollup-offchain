@@ -42,16 +42,18 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
   I,
+  QueryL2UtxosResponse (..),
   QueuedTx (..),
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
   SubmitTxRequest (..),
   SubmitTxResponse (..),
-  QueryL2UtxosResponse (..),
  )
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.Bool (fromBool)
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..))
 import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
 
@@ -134,9 +136,8 @@ handleSubmitL1Tx ctx SubmitL1TxRequest {..} = do
   pure $ SubmitL1TxResponse txId
 
 -- | Handle L2 UTxO query by address.
-handleQueryL2Utxos ∷ Ctx → Integer → IO QueryL2UtxosResponse
-handleQueryL2Utxos Ctx {..} addr = do
+handleQueryL2Utxos ∷ Ctx → FieldElement RollupBFInterpreter → IO QueryL2UtxosResponse
+handleQueryL2Utxos Ctx {..} l2Addr = do
   utxoPreimage ← readTVarIO ctxUtxoPreimageVar
-  let l2Addr = fromConstant addr
-      matching = utxosAtL2Address l2Addr utxoPreimage
+  let matching = utxosAtL2Address l2Addr utxoPreimage
   pure $ QueryL2UtxosResponse matching

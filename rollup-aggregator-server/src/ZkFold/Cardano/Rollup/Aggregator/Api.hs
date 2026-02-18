@@ -24,12 +24,14 @@ import ZkFold.Cardano.Rollup.Aggregator.Orphans ()
 import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest,
   BridgeInResponse,
+  QueryL2UtxosResponse,
   SubmitL1TxRequest,
   SubmitL1TxResponse,
   SubmitTxRequest,
   SubmitTxResponse,
-  QueryL2UtxosResponse,
  )
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 
 -- | Health check endpoint.
 type HealthAPI = "health" :> Get '[JSON] ()
@@ -42,7 +44,10 @@ type BridgeInAPI = "bridge" :> "in" :> ReqBody '[JSON] BridgeInRequest :> Post '
 type SubmitL1TxAPI = "l1" :> "tx" :> "submit" :> ReqBody '[JSON] SubmitL1TxRequest :> Post '[JSON] SubmitL1TxResponse
 
 -- | Query UTxOs at a given L2 address.
-type QueryL2UtxosAPI = "utxos" :> QueryParam' '[Required, Strict] "address" Integer :> Get '[JSON] QueryL2UtxosResponse
+type QueryL2UtxosAPI =
+  "utxos"
+    :> QueryParam' '[Required, Strict] "address" (FieldElement RollupBFInterpreter)
+    :> Get '[JSON] QueryL2UtxosResponse
 
 -- | V0 API - combines all endpoints.
 type V0API =
