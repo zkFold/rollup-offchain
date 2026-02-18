@@ -9,6 +9,7 @@ import Data.Data (Proxy (..))
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
 import GHC.Generics ((:.:) (..))
+import GHC.Natural (Natural)
 import GHC.TypeNats (natVal)
 import GeniusYield.Test.FakeCoin (FakeCoin (..), fakePolicy, fakeValue)
 import GeniusYield.Test.Privnet.Ctx (
@@ -41,18 +42,23 @@ import Test.Tasty.HUnit (assertEqual, assertFailure, testCaseSteps)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, processBatch, takeExactly)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx qualified as AggCtx
-import ZkFold.Cardano.Rollup.Aggregator.Handlers (handleBridgeIn, handleSubmitTx)
+import ZkFold.Cardano.Rollup.Aggregator.Handlers (handleBridgeIn, handleQueryL2Utxos, handleSubmitTx)
 import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
+  QueryL2UtxosResponse (..),
   SubmitTxRequest (..),
   SubmitTxResponse (..),
  )
+import ZkFold.Algebra.Class (FromConstant (..), ToConstant (..))
 import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup)
 import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
+import ZkFold.Symbolic.Ledger.Types (Output (..), UTxO (..), adaName, adaPolicy)
+import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
+import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 endToEndTests ∷ Setup → TestTree
 endToEndTests setup =
@@ -173,6 +179,30 @@ endToEndTests setup =
                 tid ← processBatch aggCtx txs
                 info $ "Batch submitted: " <> show tid
 
+            -- Step 6b: Query L2 UTxOs after batch 1
+            -- After tx1+tx2: address has 5 ADA + 25 asset2, address2 has 5 ADA + 25 asset2
+            let addrInt = fromIntegral @Natural @Integer $ toConstant $ toConstant Ex3.address
+                addr2Int = fromIntegral @Natural @Integer $ toConstant $ toConstant Ex3.address2
+                expectedOut5Ada25Asset2 addr' =
+                  Output
+                    { oAddress = addr'
+                    , oAssets =
+                        Comp1 $
+                          unsafeToVector'
+                            [ AssetValue adaPolicy adaName (fromConstant (5_000_000 ∷ Natural))
+                            , AssetValue Ex3.asset2Policy Ex3.asset2Name (fromConstant (25_000_000 ∷ Natural))
+                            ]
+                    }
+            QueryL2UtxosResponse utxos1Addr ← handleQueryL2Utxos aggCtx addrInt
+            assertEqual "UTxO count at address after batch 1" 1 (length utxos1Addr)
+            assertEqual "UTxO output at address after batch 1" (expectedOut5Ada25Asset2 Ex3.address) (uOutput (head utxos1Addr))
+            info "UTxOs at address after batch 1: verified"
+
+            QueryL2UtxosResponse utxos1Addr2 ← handleQueryL2Utxos aggCtx addr2Int
+            assertEqual "UTxO count at address2 after batch 1" 1 (length utxos1Addr2)
+            assertEqual "UTxO output at address2 after batch 1" (expectedOut5Ada25Asset2 Ex3.address2) (uOutput (head utxos1Addr2))
+            info "UTxOs at address2 after batch 1: verified"
+
             -- tx3: 1 bridge-out (5 ADA + 25 asset2 to bridge-out address)
             let bridgeOutAddr =
                   addressToBech32 $
@@ -206,5 +236,28 @@ endToEndTests setup =
               Just txs → do
                 tid ← processBatch aggCtx txs
                 info $ "Batch submitted: " <> show tid
-                info "End-to-end test passed"
+
+            -- Step 8b: Query L2 UTxOs after batch 2
+            -- After tx3+tx4: address has 2.5 ADA + 12.5 asset2, address2 has 2.5 ADA + 12.5 asset2
+            let expectedOut2_5Ada12_5Asset2 addr' =
+                  Output
+                    { oAddress = addr'
+                    , oAssets =
+                        Comp1 $
+                          unsafeToVector'
+                            [ AssetValue adaPolicy adaName (fromConstant (2_500_000 ∷ Natural))
+                            , AssetValue Ex3.asset2Policy Ex3.asset2Name (fromConstant (12_500_000 ∷ Natural))
+                            ]
+                    }
+            QueryL2UtxosResponse utxos2Addr ← handleQueryL2Utxos aggCtx addrInt
+            assertEqual "UTxO count at address after batch 2" 1 (length utxos2Addr)
+            assertEqual "UTxO output at address after batch 2" (expectedOut2_5Ada12_5Asset2 Ex3.address) (uOutput (head utxos2Addr))
+            info "UTxOs at address after batch 2: verified"
+
+            QueryL2UtxosResponse utxos2Addr2 ← handleQueryL2Utxos aggCtx addr2Int
+            assertEqual "UTxO count at address2 after batch 2" 1 (length utxos2Addr2)
+            assertEqual "UTxO output at address2 after batch 2" (expectedOut2_5Ada12_5Asset2 Ex3.address2) (uOutput (head utxos2Addr2))
+            info "UTxOs at address2 after batch 2: verified"
+
+            info "End-to-end test passed"
         ]
