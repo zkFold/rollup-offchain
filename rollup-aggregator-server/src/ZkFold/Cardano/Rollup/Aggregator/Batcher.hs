@@ -138,9 +138,13 @@ queryBridgeIns ctx = runQuery ctx $ do
     _ → pure []
 
 -- | Convert a list of (L2 address, GYValue) pairs into the symbolic bridge-in representation.
+-- Takes up to 'Bi' items and pads the rest with 'nullOutput'.
 toBridgedIn ∷ [(Integer, GYValue)] → (Vector Bi :.: Output A) I
-toBridgedIn [] = Comp1 (fromList [nullOutput @A @I])
-toBridgedIn ((addr, val) : _) = Comp1 (fromList [toSymbolicOutput addr val])
+toBridgedIn items =
+  let biCount = fromIntegral (natVal (Proxy @Bi))
+      converted = map (uncurry toSymbolicOutput) (take biCount items)
+      padded = converted ++ replicate (biCount - length converted) (nullOutput @A @I)
+   in Comp1 (unsafeToVector' padded)
 
 -- | Convert an L2 address and a 'GYValue' into a symbolic 'Output'.
 toSymbolicOutput ∷ Integer → GYValue → Output A I
