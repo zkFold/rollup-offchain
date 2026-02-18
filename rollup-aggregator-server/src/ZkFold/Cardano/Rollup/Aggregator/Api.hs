@@ -111,4 +111,4 @@ aggregatorAPIOpenApi =
       ["L1 transactions" & OpenApi.description ?~ "Submit L1 transactions."]
     & OpenApi.applyTagsFor
       (subOperations (Proxy ∷ Proxy (V0 :> QueryL2UtxosAPI)) (Proxy ∷ Proxy AggregatorAPI))
-      ["L2 queries" & OpenApi.description ?~ "Query L2 ledger state."]
+      ["L2 utxo queries" & OpenApi.description ?~ "Query L2 UTxO state."]
