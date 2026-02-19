@@ -62,7 +62,6 @@ library
     http-types,
     lens,
     mtl,
-    plutus-ledger-api,
     plutus-tx,
     swagger2,
     symbolic-base,

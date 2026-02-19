@@ -15,17 +15,25 @@ import Control.Concurrent.STM (
   readTVar,
   writeTVar,
  )
-import Control.Exception (SomeException, try)
+import Control.Exception (Exception, Handler (Handler), catches, displayException)
 import Control.Monad (forM, forever)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.ByteString (ByteString)
+import Data.Foldable (for_)
 import Data.Function ((&))
 import Data.Maybe (catMaybes)
 import Data.Proxy (Proxy (..))
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeNats (natVal, type (+))
+import GeniusYield.Providers.Blockfrost (BlockfrostProviderException)
+import GeniusYield.Providers.Common (SubmitTxException)
+import GeniusYield.Providers.Kupo (KupoProviderException)
+import GeniusYield.Providers.Maestro (MaestroProviderException)
+import GeniusYield.Providers.Ogmios (OgmiosProviderException)
 import GeniusYield.TxBuilder (buildTxBody, runGYTxMonadIO, signAndSubmitConfirmed, utxoDatum, utxosAtAddress)
+import GeniusYield.TxBuilder.Errors (GYTxMonadException)
 import GeniusYield.Types (
+  GYAwaitTxException,
   GYTxId,
   GYValue,
   filterUTxOs,
@@ -174,13 +182,27 @@ startBatcher ctx@Ctx {..} bs = forever $ do
   let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
   threadDelay delayMicros
   mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
-  case mQueued of
-    Nothing → pure ()
-    Just queued → do
-      result ← try $ processBatch ctx bs queued
-      case result of
-        Left (err ∷ SomeException) → gyLogError ctxProviders mempty $ "Batch processing failed: " <> show err
-        Right tid → gyLogInfo ctxProviders mempty $ "Batch submitted: " <> show tid
+  for_ mQueued (processBatchWithLogging ctx bs)
+
+processBatchWithLogging ∷ Ctx → BatcherState → [QueuedTx] → IO ()
+processBatchWithLogging ctx@Ctx {..} bs queued =
+  ( do
+      tid ← processBatch ctx bs queued
+      gyLogInfo ctxProviders mempty $ "Batch submitted: " <> show tid
+  )
+    `catches` [ Handler (\(err ∷ GYTxMonadException) → logException "GYTxMonadException" err)
+              , Handler (\(err ∷ SubmitTxException) → logException "SubmitTxException" err)
+              , Handler (\(err ∷ GYAwaitTxException) → logException "GYAwaitTxException" err)
+              , Handler (\(err ∷ BlockfrostProviderException) → logException "BlockfrostProviderException" err)
+              , Handler (\(err ∷ MaestroProviderException) → logException "MaestroProviderException" err)
+              , Handler (\(err ∷ KupoProviderException) → logException "KupoProviderException" err)
+              , Handler (\(err ∷ OgmiosProviderException) → logException "OgmiosProviderException" err)
+              ]
+ where
+  logException ∷ Exception e ⇒ String → e → IO ()
+  logException label err =
+    gyLogError ctxProviders mempty $
+      "Batch processing failed (" <> label <> "): " <> displayException err
 
 processBatch ∷ Ctx → BatcherState → [QueuedTx] → IO GYTxId
 processBatch ctx@Ctx {..} BatcherState {..} queuedTxs = do
