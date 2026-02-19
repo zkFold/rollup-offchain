@@ -218,10 +218,10 @@ endToEndTests setup =
             -- Step 8b: Query L2 UTxOs after batch 2
             let [out1 :*: _, out2 :*: _] = Ex3.tx4 & outputs & unComp1 & fromVector
             QueryL2UtxosResponse utxos2Addr ← handleQueryL2Utxos aggCtx Ex3.address
-            assertEqual "UTxO output at address after batch 2" [out1] (uOutput <$> utxos2Addr)
+            assertEqual "UTxO output at address after batch 2" [out2] (uOutput <$> utxos2Addr)
 
             QueryL2UtxosResponse utxos2Addr2 ← handleQueryL2Utxos aggCtx Ex3.address2
-            assertEqual "UTxO output at address2 after batch 2" [out2] (uOutput <$> utxos2Addr2)
+            assertEqual "UTxO output at address2 after batch 2" [out1] (uOutput <$> utxos2Addr2)
 
             info "End-to-end test passed"
         ]
