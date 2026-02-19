@@ -82,12 +82,8 @@ withCtx mConfigPath action = do
             }
     action serverConfig ctx
 
--- | Run the HTTP server. Does not start the batcher (run as a separate process).
-runServer ∷ Maybe FilePath → IO ()
-runServer mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
-  initDb (ctxDbPath ctx)
-  let logInfoS = gyLogInfo (ctxProviders ctx) mempty
-      logErrorS = gyLogError (ctxProviders ctx) mempty
+logConfig :: (String -> b) -> Ctx -> ServerConfig -> b
+logConfig logInfoS ctx serverConfig = do
   logInfoS $
     "\nServer configuration: "
       <> "\nPort: "
@@ -116,6 +112,13 @@ runServer mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
       <> show (coreConfigFromServerConfig serverConfig)
       <> "\nDB Path: "
       <> ctxDbPath ctx
+
+runServer ∷ Maybe FilePath → IO ()
+runServer mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
+  initDb (ctxDbPath ctx)
+  let logInfoS = gyLogInfo (ctxProviders ctx) mempty
+      logErrorS = gyLogError (ctxProviders ctx) mempty
+  logConfig logInfoS ctx serverConfig
   BS.writeFile "web/openapi/api.yaml" (Yaml.encodePretty Yaml.defConfig aggregatorAPIOpenApi)
   reqLoggerMiddleware ← gcpReqLogger
   let
@@ -154,10 +157,10 @@ runServer mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
               (\ioAct → Handler . ExceptT $ first (apiErrorToServerError . exceptionHandler) <$> try ioAct)
             $ aggregatorServer ctx
 
--- | Run the batcher as a standalone blocking process.
--- Intended to run as a separate OS process from the server.
 runBatcher ∷ Maybe FilePath → IO ()
-runBatcher mConfigPath = withCtx mConfigPath $ \_serverConfig ctx → do
+runBatcher mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
   initDb (ctxDbPath ctx)
+  let logInfoS = gyLogInfo (ctxProviders ctx) mempty
+  logConfig logInfoS ctx serverConfig
   batcherState ← initBatcherState (ctxDbPath ctx)
   startBatcher ctx batcherState
