@@ -82,10 +82,10 @@ withCtx mConfigPath action = do
             }
     action serverConfig ctx
 
-logConfig :: (String -> b) -> Ctx -> ServerConfig -> b
-logConfig logInfoS ctx serverConfig = do
+logConfig :: String -> (String -> b) -> Ctx -> ServerConfig -> b
+logConfig tag logInfoS ctx serverConfig = do
   logInfoS $
-    "\nServer configuration: "
+    "\n" <> tag <> ": "
       <> "\nPort: "
       <> show (scPort serverConfig)
       <> "\nAddress of wallet: "
@@ -118,7 +118,7 @@ runServer mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
   initDb (ctxDbPath ctx)
   let logInfoS = gyLogInfo (ctxProviders ctx) mempty
       logErrorS = gyLogError (ctxProviders ctx) mempty
-  logConfig logInfoS ctx serverConfig
+  logConfig "Server" logInfoS ctx serverConfig
   BS.writeFile "web/openapi/api.yaml" (Yaml.encodePretty Yaml.defConfig aggregatorAPIOpenApi)
   reqLoggerMiddleware ← gcpReqLogger
   let
@@ -161,6 +161,6 @@ runBatcher ∷ Maybe FilePath → IO ()
 runBatcher mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
   initDb (ctxDbPath ctx)
   let logInfoS = gyLogInfo (ctxProviders ctx) mempty
-  logConfig logInfoS ctx serverConfig
+  logConfig "Batcher" logInfoS ctx serverConfig
   batcherState ← initBatcherState (ctxDbPath ctx)
   startBatcher ctx batcherState
