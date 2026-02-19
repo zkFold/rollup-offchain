@@ -1,5 +1,6 @@
 module ZkFold.Cardano.Rollup.Aggregator.Run (
   runServer,
+  runBatcher,
 ) where
 
 import Control.Exception (Exception (..), SomeException (..), throwIO, try)
@@ -22,11 +23,11 @@ import System.TimeManager (TimeoutThread (..))
 import ZkFold.Cardano.Rollup.Aggregator.Api
 import ZkFold.Cardano.Rollup.Aggregator.Auth
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, startBatcher)
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (loadState)
 import ZkFold.Cardano.Rollup.Aggregator.Config
 import ZkFold.Cardano.Rollup.Aggregator.Ctx
 import ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware
 import ZkFold.Cardano.Rollup.Aggregator.Handlers (aggregatorServer)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (initDb)
 import ZkFold.Cardano.Rollup.Aggregator.RequestLoggerMiddleware (gcpReqLogger)
 import ZkFold.Cardano.Rollup.Aggregator.Utils
 import ZkFold.Cardano.Rollup.Constants (zkRollupBuildInfo)
@@ -36,45 +37,14 @@ import ZkFold.Cardano.Rollup.Types (
   ZKRollupStakeValConfig (..),
  )
 
--- | Run the server by loading configuration from a file.
-runServer ∷ Maybe FilePath → IO ()
-runServer mConfigPath = do
+-- | Build a 'Ctx' from configuration and pass it to a continuation.
+withCtx ∷ Maybe FilePath → (ServerConfig → Ctx → IO ()) → IO ()
+withCtx mConfigPath action = do
   serverConfig ← serverConfigOptionalFPIO mConfigPath
   signingKey ← signingKeyFromServerConfig serverConfig
   let nid = scNetworkId serverConfig
       coreCfg = coreConfigFromServerConfig serverConfig
   withCfgProviders coreCfg "aggregator-server" $ \providers → do
-    let logInfoS = gyLogInfo providers mempty
-        logErrorS = gyLogError providers mempty
-    logInfoS $
-      "\nServer configuration: "
-        <> "\nPort: "
-        <> show (scPort serverConfig)
-        <> "\nAddress of wallet: "
-        <> show (snd signingKey)
-        <> "\nCollateral: "
-        <> show (scCollateral serverConfig)
-        <> "\nRollup NFT: "
-        <> show (scRollupNFT serverConfig)
-        <> "\nRollup Address: "
-        <> show (scRollupAddr serverConfig)
-        <> "\nRollup Script Ref: "
-        <> show (scRollupScriptRef serverConfig)
-        <> "\nRollup Stake Script Ref: "
-        <> show (scRollupStakeScriptRef serverConfig)
-        <> "\nMax Bridge In: "
-        <> show (scMaxBridgeIn serverConfig)
-        <> "\nMax Bridge Out: "
-        <> show (scMaxBridgeOut serverConfig)
-        <> "\nMax Output Assets: "
-        <> show (scMaxOutputAssets serverConfig)
-        <> "\nBatch Config: "
-        <> show (scBatchConfig serverConfig)
-        <> "\nCore Config: "
-        <> show coreCfg
-    BS.writeFile "web/openapi/api.yaml" (Yaml.encodePretty Yaml.defConfig aggregatorAPIOpenApi)
-    reqLoggerMiddleware ← gcpReqLogger
-
     nftToken ← case scRollupNFT serverConfig of
       GYToken pid tn → pure $ GYNonAdaToken pid tn
       GYLovelace → throwIO $ userError "Rollup NFT cannot be Ada"
@@ -87,12 +57,10 @@ runServer mConfigPath = do
             , zkrsvcMaxBridgeOut = scMaxBridgeOut serverConfig
             , zkrsvcMaxOutputAssets = scMaxOutputAssets serverConfig
             }
-
-    let rollupStakeScript = zkrbiRollupStake zkRollupBuildInfo stakeValConfig
+        rollupStakeScript = zkrbiRollupStake zkRollupBuildInfo stakeValConfig
         rollupStakeScriptHash = scriptHash rollupStakeScript
         rollupScript = zkrbiRollup zkRollupBuildInfo rollupStakeScriptHash
-
-    let buildInfo =
+        buildInfo =
           ZKInitializedRollupBuildInfo
             { zkirbiRollup = rollupScript
             , zkirbiRollupStake = rollupStakeScript
@@ -102,70 +70,94 @@ runServer mConfigPath = do
             , zkirbiRollupStakeRef = scRollupStakeScriptRef serverConfig
             , zkirbiRollupStakeValConfig = stakeValConfig
             }
+        ctx =
+          Ctx
+            { ctxNetworkId = nid
+            , ctxProviders = providers
+            , ctxSigningKey = signingKey
+            , ctxCollateral = scCollateral serverConfig
+            , ctxRollupBuildInfo = buildInfo
+            , ctxBatchConfig = scBatchConfig serverConfig
+            , ctxDbPath = scDbPath serverConfig
+            }
+    action serverConfig ctx
 
-    mPersistedState ← do
-      mState ← loadState (scStatePersistPath serverConfig)
-      case mState of
-        Just _ → logInfoS "Restored persisted ledger state from disk."
-        Nothing → logInfoS "No persisted state found, starting fresh."
-      pure mState
-    (batchQueue, ledgerStateVar, utxoPreimageVar, trustedSetup, ledgerCircuit, proverSecret) ← initBatcherState mPersistedState
-    let
-      -- These are only meant to catch fatal exceptions, application thrown exceptions should be caught beforehand.
-      onException ∷ req → SomeException → IO ()
-      onException _req exc =
-        displayException exc
-          & if isMatchedException exceptionsToIgnore exc
-            then logInfoS
-            else logErrorS
-       where
-        -- TimeoutThread and Warp.ConnectionClosedByPeer do not indicate that anything is wrong and
-        -- should not be logged as errors. See
-        -- https://magnus.therning.org/2021-07-03-the-timeout-manager-exception.html
-        -- https://www.rfc-editor.org/rfc/rfc5246#page-29
-        exceptionsToIgnore = Proxy @TimeoutThread :>> Proxy @Warp.InvalidRequest :>> ENil
-      onExceptionResponse ∷ SomeException → Wai.Response
-      onExceptionResponse _ = responseServerError . apiErrorToServerError $ someBackendError "Internal Server Error"
-      corsPolicy =
-        Cors.simpleCorsResourcePolicy
-          { Cors.corsRequestHeaders = ["Content-Type", "api-key"]
-          , Cors.corsMethods = ["GET", "POST", "PUT", "OPTIONS"]
-          , Cors.corsOrigins = Nothing -- Allow all origins, restrict as needed
-          }
-      settings =
-        Warp.defaultSettings
-          & Warp.setPort (scPort serverConfig)
-          & Warp.setOnException onException
-          & Warp.setOnExceptionResponse onExceptionResponse
-      errLoggerMiddleware = errorLoggerMiddleware $ logErrorS . LT.unpack
-      ctx =
-        Ctx
-          { ctxNetworkId = nid
-          , ctxProviders = providers
-          , ctxSigningKey = signingKey
-          , ctxCollateral = scCollateral serverConfig
-          , ctxRollupBuildInfo = buildInfo
-          , ctxBatchConfig = scBatchConfig serverConfig
-          , ctxBatchQueue = batchQueue
-          , ctxLedgerStateVar = ledgerStateVar
-          , ctxUtxoPreimageVar = utxoPreimageVar
-          , ctxTrustedSetup = trustedSetup
-          , ctxLedgerCircuit = ledgerCircuit
-          , ctxProverSecret = proverSecret
-          , ctxStatePersistPath = scStatePersistPath serverConfig
-          }
+-- | Run the HTTP server. Does not start the batcher (run as a separate process).
+runServer ∷ Maybe FilePath → IO ()
+runServer mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
+  initDb (ctxDbPath ctx)
+  let logInfoS = gyLogInfo (ctxProviders ctx) mempty
+      logErrorS = gyLogError (ctxProviders ctx) mempty
+  logInfoS $
+    "\nServer configuration: "
+      <> "\nPort: "
+      <> show (scPort serverConfig)
+      <> "\nAddress of wallet: "
+      <> show (snd (ctxSigningKey ctx))
+      <> "\nCollateral: "
+      <> show (ctxCollateral ctx)
+      <> "\nRollup NFT: "
+      <> show (scRollupNFT serverConfig)
+      <> "\nRollup Address: "
+      <> show (scRollupAddr serverConfig)
+      <> "\nRollup Script Ref: "
+      <> show (scRollupScriptRef serverConfig)
+      <> "\nRollup Stake Script Ref: "
+      <> show (scRollupStakeScriptRef serverConfig)
+      <> "\nMax Bridge In: "
+      <> show (scMaxBridgeIn serverConfig)
+      <> "\nMax Bridge Out: "
+      <> show (scMaxBridgeOut serverConfig)
+      <> "\nMax Output Assets: "
+      <> show (scMaxOutputAssets serverConfig)
+      <> "\nBatch Config: "
+      <> show (scBatchConfig serverConfig)
+      <> "\nCore Config: "
+      <> show (coreConfigFromServerConfig serverConfig)
+      <> "\nDB Path: "
+      <> ctxDbPath ctx
+  BS.writeFile "web/openapi/api.yaml" (Yaml.encodePretty Yaml.defConfig aggregatorAPIOpenApi)
+  reqLoggerMiddleware ← gcpReqLogger
+  let
+    onException ∷ req → SomeException → IO ()
+    onException _req exc =
+      displayException exc
+        & if isMatchedException exceptionsToIgnore exc
+          then logInfoS
+          else logErrorS
+     where
+      exceptionsToIgnore = Proxy @TimeoutThread :>> Proxy @Warp.InvalidRequest :>> ENil
+    onExceptionResponse ∷ SomeException → Wai.Response
+    onExceptionResponse _ = responseServerError . apiErrorToServerError $ someBackendError "Internal Server Error"
+    corsPolicy =
+      Cors.simpleCorsResourcePolicy
+        { Cors.corsRequestHeaders = ["Content-Type", "api-key"]
+        , Cors.corsMethods = ["GET", "POST", "PUT", "OPTIONS"]
+        , Cors.corsOrigins = Nothing
+        }
+    settings =
+      Warp.defaultSettings
+        & Warp.setPort (scPort serverConfig)
+        & Warp.setOnException onException
+        & Warp.setOnExceptionResponse onExceptionResponse
+    errLoggerMiddleware = errorLoggerMiddleware $ logErrorS . LT.unpack
+  Warp.runSettings settings
+    . reqLoggerMiddleware
+    . errLoggerMiddleware
+    . errorJsonWrapMiddleware
+    . Cors.cors (const $ Just corsPolicy)
+    $ let context = apiKeyAuthHandler (case scApiKey serverConfig of Confidential t → apiKeyFromText t) :. EmptyContext
+       in serveWithContext mainAPI context
+            $ hoistServerWithContext
+              mainAPI
+              (Proxy ∷ Proxy '[AuthHandler Wai.Request ()])
+              (\ioAct → Handler . ExceptT $ first (apiErrorToServerError . exceptionHandler) <$> try ioAct)
+            $ aggregatorServer ctx
 
-    -- TODO: We should make batcher separate & fault-tolerant to the server.
-    startBatcher ctx
-    Warp.runSettings settings
-      . reqLoggerMiddleware
-      . errLoggerMiddleware
-      . errorJsonWrapMiddleware
-      . Cors.cors (const $ Just corsPolicy)
-      $ let context = apiKeyAuthHandler (case scApiKey serverConfig of Confidential t → apiKeyFromText t) :. EmptyContext
-         in serveWithContext mainAPI context
-              $ hoistServerWithContext
-                mainAPI
-                (Proxy ∷ Proxy '[AuthHandler Wai.Request ()])
-                (\ioAct → Handler . ExceptT $ first (apiErrorToServerError . exceptionHandler) <$> try ioAct)
-              $ aggregatorServer ctx
+-- | Run the batcher as a standalone blocking process.
+-- Intended to run as a separate OS process from the server.
+runBatcher ∷ Maybe FilePath → IO ()
+runBatcher mConfigPath = withCtx mConfigPath $ \_serverConfig ctx → do
+  initDb (ctxDbPath ctx)
+  batcherState ← initBatcherState (ctxDbPath ctx)
+  startBatcher ctx batcherState
