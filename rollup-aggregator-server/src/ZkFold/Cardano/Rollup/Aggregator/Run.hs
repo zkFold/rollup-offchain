@@ -85,7 +85,7 @@ withCtx mConfigPath action = do
 logConfig :: String -> (String -> b) -> Ctx -> ServerConfig -> b
 logConfig tag logInfoS ctx serverConfig = do
   logInfoS $
-    "\n" <> tag <> ": "
+    "\n" <> tag <> " configuration: "
       <> "\nPort: "
       <> show (scPort serverConfig)
       <> "\nAddress of wallet: "
