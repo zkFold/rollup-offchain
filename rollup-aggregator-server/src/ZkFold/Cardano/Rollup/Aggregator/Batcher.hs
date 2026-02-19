@@ -1,35 +1,28 @@
 module ZkFold.Cardano.Rollup.Aggregator.Batcher (
+  BatcherState (..),
   initBatcherState,
   startBatcher,
   enqueueTx,
   processBatch,
-  takeExactly,
   initialState,
 ) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async)
 import Control.Concurrent.STM (
-  STM,
-  TQueue,
   TVar,
   atomically,
-  newTQueueIO,
   newTVarIO,
   readTVar,
-  tryReadTQueue,
-  writeTQueue,
   writeTVar,
  )
 import Control.Exception (SomeException, try)
-import Control.Monad (forM, forever, void)
+import Control.Monad (forM, forever)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.ByteString (ByteString)
 import Data.Function ((&))
 import Data.Maybe (catMaybes)
 import Data.Proxy (Proxy (..))
 import GHC.Generics ((:*:) (..), (:.:) (..))
-import GHC.Natural (Natural)
 import GHC.TypeNats (natVal, type (+))
 import GeniusYield.TxBuilder (buildTxBody, runGYTxMonadIO, signAndSubmitConfirmed, utxoDatum, utxosAtAddress)
 import GeniusYield.Types (
@@ -51,7 +44,13 @@ import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), saveState)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (
+  PersistedState (..),
+  dequeueTxsDb,
+  enqueueTxDb,
+  loadState,
+  saveState,
+ )
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
@@ -76,18 +75,19 @@ import ZkFold.Symbolic.Ledger.Offchain.State.Update (updateLedgerState)
 import ZkFold.Symbolic.Ledger.Types
 import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
-initBatcherState
-  ∷ Maybe PersistedState
-  → IO
-      ( TQueue QueuedTx
-      , TVar (State Bi Bo Ud A I)
-      , TVar (Leaves Ud (UTxO A I))
-      , TrustedSetup (LedgerCircuitGates + 6)
-      , LedgerCircuit Bi Bo Ud A Ixs Oxs TxCount
-      , PlonkupProverSecret BLS12_381_G1_JacobianPoint
-      )
-initBatcherState mPersisted = do
-  queue ← newTQueueIO
+-- | In-process mutable state and cryptographic material for the batcher.
+data BatcherState = BatcherState
+  { bsLedgerStateVar ∷ !(TVar (State Bi Bo Ud A I))
+  , bsUtxoPreimageVar ∷ !(TVar (Leaves Ud (UTxO A I)))
+  , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
+  , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A Ixs Oxs TxCount)
+  , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
+  }
+
+-- | Initialise batcher state by loading persisted state from the SQLite database.
+initBatcherState ∷ FilePath → IO BatcherState
+initBatcherState dbPath = do
+  mPersisted ← loadState dbPath
   let (initSt, initUtxo) = case mPersisted of
         Just (PersistedState st utxo) → (st, utxo)
         Nothing → (initialState, initialUtxoPreimage)
@@ -96,7 +96,7 @@ initBatcherState mPersisted = do
   ts ← powersOfTauSubset
   let circuit = ledgerCircuit @Bi @Bo @Ud @A @Ixs @Oxs @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
-  pure (queue, stateVar, utxoVar, ts, circuit, proverSecret)
+  pure $ BatcherState stateVar utxoVar ts circuit proverSecret
  where
   initialUtxoPreimage = pure (nullUTxO @A @I)
 
@@ -113,8 +113,9 @@ initialState =
     , sBridgeOut = hash (Comp1 (pure (nullOutput @A @I)))
     }
 
+-- | Enqueue a transaction by writing it to the SQLite database.
 enqueueTx ∷ Ctx → QueuedTx → IO ()
-enqueueTx Ctx {..} queued = atomically $ writeTQueue ctxBatchQueue queued
+enqueueTx Ctx {..} queued = enqueueTxDb ctxDbPath queued
 
 -- | Query the rollup address for 'BridgeInInitial' UTxOs, returning L2 address and value.
 queryBridgeIns ∷ Ctx → IO [(Integer, GYValue)]
@@ -166,38 +167,26 @@ toSymbolicOutput addr val =
       , assetQuantity = fromConstant amt
       }
 
--- | Take exactly @n@ items from the queue. If fewer than @n@ are available,
--- put them all back and return 'Nothing'.
-takeExactly ∷ Natural → TQueue a → STM (Maybe [a])
-takeExactly n q = go n []
- where
-  go 0 acc = pure (Just (reverse acc))
-  go !remaining acc = do
-    mx ← tryReadTQueue q
-    case mx of
-      Nothing → do
-        mapM_ (writeTQueue q) (reverse acc)
-        pure Nothing
-      Just x → go (remaining - 1) (x : acc)
-
-startBatcher ∷ Ctx → IO ()
-startBatcher ctx@Ctx {..} = void . async . forever $ do
+-- | Run the batcher loop (blocking). Polls the database at the configured interval
+-- and processes a batch whenever enough transactions are queued.
+startBatcher ∷ Ctx → BatcherState → IO ()
+startBatcher ctx@Ctx {..} bs = forever $ do
   let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
   threadDelay delayMicros
-  mQueued ← atomically $ takeExactly (bcBatchTransactions ctxBatchConfig) ctxBatchQueue
+  mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
   case mQueued of
     Nothing → pure ()
     Just queued → do
-      result ← try $ processBatch ctx queued
+      result ← try $ processBatch ctx bs queued
       case result of
         Left (err ∷ SomeException) → gyLogError ctxProviders mempty $ "Batch processing failed: " <> show err
         Right tid → gyLogInfo ctxProviders mempty $ "Batch submitted: " <> show tid
 
-processBatch ∷ Ctx → [QueuedTx] → IO GYTxId
-processBatch ctx@Ctx {..} queuedTxs = do
+processBatch ∷ Ctx → BatcherState → [QueuedTx] → IO GYTxId
+processBatch ctx@Ctx {..} BatcherState {..} queuedTxs = do
   (prevState, prevUtxoPreimage) ←
     atomically $
-      (,) <$> readTVar ctxLedgerStateVar <*> readTVar ctxUtxoPreimageVar
+      (,) <$> readTVar bsLedgerStateVar <*> readTVar bsUtxoPreimageVar
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
       batch = TransactionBatch {tbTransactions = unsafeToVector' (map qtTransaction queuedTxs)}
@@ -215,9 +204,9 @@ processBatch ctx@Ctx {..} queuedTxs = do
           }
       proof =
         ledgerProof @ByteString
-          ctxTrustedSetup
-          ctxProverSecret
-          ctxLedgerCircuit
+          bsTrustedSetup
+          bsProverSecret
+          bsLedgerCircuit
           lci
       proofBytes = mkProof proof
       proofPlutus = proofToPlutus proofBytes
@@ -238,7 +227,7 @@ processBatch ctx@Ctx {..} queuedTxs = do
         body ← buildTxBody skel
         signAndSubmitConfirmed body
   atomically $ do
-    writeTVar ctxLedgerStateVar newState
-    writeTVar ctxUtxoPreimageVar newPreimage
-  saveState ctxStatePersistPath newState newPreimage
+    writeTVar bsLedgerStateVar newState
+    writeTVar bsUtxoPreimageVar newPreimage
+  saveState ctxDbPath newState newPreimage
   pure submittedTxId

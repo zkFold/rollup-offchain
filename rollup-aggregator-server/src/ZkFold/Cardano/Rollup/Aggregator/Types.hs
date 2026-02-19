@@ -66,6 +66,9 @@ data QueuedTx = QueuedTx
   , qtBridgeOuts ∷ ![(GYValue, GYAddress)]
   }
   deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix "qt", LowerFirst]] QueuedTx
 
 type SubmitTxReqPrefix ∷ Symbol
 type SubmitTxReqPrefix = "str"

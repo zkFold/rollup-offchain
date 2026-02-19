@@ -2,7 +2,6 @@
 
 module ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd (endToEndTests) where
 
-import Control.Concurrent.STM (atomically)
 import Control.Monad.Reader (runReaderT)
 import Data.Aeson qualified as Aeson
 -- import Data.ByteString (ByteString)
@@ -37,12 +36,14 @@ import GeniusYield.Types (
   utxosToList,
   valueFromLovelace,
  )
+import System.Directory (removePathForcibly)
 import Test.Tasty (TestTree, testGroup, withResource)
 import Test.Tasty.HUnit (assertEqual, assertFailure, testCaseSteps)
-import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, processBatch, takeExactly)
+import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, processBatch)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx qualified as AggCtx
 import ZkFold.Cardano.Rollup.Aggregator.Handlers (handleBridgeIn, handleQueryL2Utxos, handleSubmitTx)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (dequeueTxsDb, initDb)
 import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
@@ -61,20 +62,23 @@ endToEndTests ∷ Setup → TestTree
 endToEndTests setup =
   withResource
     ( do
-        (queue, stateVar, utxoVar, ts, circuit, proverSecret) ← initBatcherState Nothing
+        let dbPath = "/tmp/rollup-aggregator-test.db"
+        removePathForcibly dbPath
+        initDb dbPath
+        batcherState ← initBatcherState dbPath
         setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
         let setupBytes =
               -- ledgerSetup @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.Ixs @Ex3.Oxs @Ex3.TxCount @Ex3.I ts circuit
               --   & mkSetup
               fromMaybe undefined (Aeson.decode setupBytesJson)
-        pure (queue, stateVar, utxoVar, ts, circuit, proverSecret, setupBytes)
+        pure (dbPath, batcherState, setupBytes)
     )
     (\_ → pure ())
     $ \getResources →
       testGroup
         "End-to-end tests"
         [ testCaseSteps "Bridge-in + L2 txs + batch processing" $ \info → withSetup info setup $ \privCtx → do
-            (queue, stateVar, utxoVar, ts, circuit, proverSecret, setupBytes) ← getResources
+            (dbPath, batcherState, setupBytes) ← getResources
             -- BSL.writeFile "rollup-aggregator-server/test/data/setup-bytes.json" (Aeson.encode setupBytes)
             -- Step 1: Admin setup — seed rollup and register stake validator
             let fundUser = ctxUserF privCtx
@@ -114,13 +118,7 @@ endToEndTests setup =
                     , AggCtx.ctxCollateral = collateralRef
                     , AggCtx.ctxRollupBuildInfo = buildInfo
                     , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
-                    , AggCtx.ctxBatchQueue = queue
-                    , AggCtx.ctxLedgerStateVar = stateVar
-                    , AggCtx.ctxUtxoPreimageVar = utxoVar
-                    , AggCtx.ctxTrustedSetup = ts
-                    , AggCtx.ctxLedgerCircuit = circuit
-                    , AggCtx.ctxProverSecret = proverSecret
-                    , AggCtx.ctxStatePersistPath = "/tmp/rollup-aggregator-test-state.json"
+                    , AggCtx.ctxDbPath = dbPath
                     }
 
             -- Step 4: Bridge-in via handleBridgeIn (10 ADA + 50 asset2)
@@ -169,11 +167,11 @@ endToEndTests setup =
             info "L2 tx2 queued"
 
             let txCount = natVal (Proxy @Ex3.TxCount)
-            queuedTxs ← atomically $ takeExactly txCount queue
+            queuedTxs ← dequeueTxsDb dbPath txCount
             case queuedTxs of
               Nothing → assertFailure "No transactions in batch queue"
               Just txs → do
-                tid ← processBatch aggCtx txs
+                tid ← processBatch aggCtx batcherState txs
                 info $ "Batch submitted: " <> show tid
 
             -- Step 6b: Query L2 UTxOs after batch 1
@@ -210,20 +208,20 @@ endToEndTests setup =
             assertEqual "L2 tx4 queued" "queued" status4
             info "L2 tx4 queued"
 
-            queuedTxs2 ← atomically $ takeExactly txCount queue
+            queuedTxs2 ← dequeueTxsDb dbPath txCount
             case queuedTxs2 of
               Nothing → assertFailure "No transactions in batch queue"
               Just txs → do
-                tid ← processBatch aggCtx txs
+                tid ← processBatch aggCtx batcherState txs
                 info $ "Batch submitted: " <> show tid
 
             -- Step 8b: Query L2 UTxOs after batch 2
             let [out1 :*: _, out2 :*: _] = Ex3.tx4 & outputs & unComp1 & fromVector
             QueryL2UtxosResponse utxos2Addr ← handleQueryL2Utxos aggCtx Ex3.address
-            assertEqual "UTxO output at address after batch 2" [out1] (uOutput <$> utxos2Addr)
+            assertEqual "UTxO output at address after batch 2" [out2] (uOutput <$> utxos2Addr)
 
             QueryL2UtxosResponse utxos2Addr2 ← handleQueryL2Utxos aggCtx Ex3.address2
-            assertEqual "UTxO output at address2 after batch 2" [out2] (uOutput <$> utxos2Addr2)
+            assertEqual "UTxO output at address2 after batch 2" [out1] (uOutput <$> utxos2Addr2)
 
             info "End-to-end test passed"
         ]

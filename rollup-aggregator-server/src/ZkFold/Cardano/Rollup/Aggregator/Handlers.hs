@@ -13,7 +13,6 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
   matchesBridgeOutValue,
 ) where
 
-import Control.Concurrent.STM (readTVarIO)
 import Control.Exception (throwIO)
 import Data.Bifunctor (Bifunctor (..))
 import GHC.Generics ((:*:) (..), (:.:) (..))
@@ -38,6 +37,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Ctx (
   Ctx (..),
   runSkeletonI,
  )
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), loadState)
 import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
@@ -137,7 +137,8 @@ handleSubmitL1Tx ctx SubmitL1TxRequest {..} = do
 
 -- | Handle L2 UTxO query by address.
 handleQueryL2Utxos ∷ Ctx → FieldElement RollupBFInterpreter → IO QueryL2UtxosResponse
-handleQueryL2Utxos Ctx {..} l2Addr = do
-  utxoPreimage ← readTVarIO ctxUtxoPreimageVar
-  let matching = utxosAtL2Address l2Addr utxoPreimage
-  pure $ QueryL2UtxosResponse matching
+handleQueryL2Utxos ctx l2Addr = do
+  mState ← loadState (ctxDbPath ctx)
+  case mState of
+    Nothing → pure $ QueryL2UtxosResponse []
+    Just ps → pure $ QueryL2UtxosResponse (utxosAtL2Address l2Addr (psUtxoPreimage ps))

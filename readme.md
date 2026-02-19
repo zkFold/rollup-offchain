@@ -74,7 +74,7 @@ batchConfig:
   batchIntervalSeconds: 300
 apiKey: SERVER_API_KEY
 # File path where to persist rollup-state. When starting from initial state, this file can be empty.
-statePersistPath: rollup-state.json
+dbPath: rollup.db
 maxBridgeIn: 1
 maxBridgeOut: 1
 maxOutputAssets: 2
@@ -120,6 +120,8 @@ cabal run rollup-seed -- \
 ```
 
 Sample server execution command `cabal run rollup-aggregator-server:rollup-aggregator-server -- serve -c secrets/config-preprod.yaml`.
+
+Batcher is also clubbed with same executable and uses the same configuration, to run batcher, use command `cabal run rollup-aggregator-server:rollup-aggregator-server -- batch -c secrets/config-preprod.yaml`.
 
 ### Tests
 

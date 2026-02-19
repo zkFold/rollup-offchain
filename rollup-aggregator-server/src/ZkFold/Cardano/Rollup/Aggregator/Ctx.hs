@@ -18,9 +18,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Ctx (
   runGYTxMonadNodeF,
 ) where
 
-import Control.Concurrent.STM (TQueue, TVar)
 import Control.Monad.Reader (ReaderT (..))
-import GHC.TypeNats (type (+))
 import GeniusYield.Imports (HasCallStack, Identity (..), coerce)
 import GeniusYield.Transaction (GYCoinSelectionStrategy (..))
 import GeniusYield.TxBuilder
@@ -36,17 +34,10 @@ import GeniusYield.Types (
   gyLogInfo,
   gyLogWarning,
  )
-import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig)
-import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo)
-import ZkFold.Data.MerkleTree (Leaves)
-import ZkFold.Protocol.NonInteractiveProof (TrustedSetup)
-import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret)
-import ZkFold.Symbolic.Ledger.Circuit.Compile (LedgerCircuit, LedgerCircuitGates)
-import ZkFold.Symbolic.Ledger.Types
 
--- | Server context containing all shared state and configuration.
+-- | Server context containing shared configuration for both the server and batcher.
 data Ctx = Ctx
   { ctxNetworkId ∷ !GYNetworkId
   -- ^ Cardano network ID.
@@ -60,20 +51,8 @@ data Ctx = Ctx
   -- ^ Rollup script information.
   , ctxBatchConfig ∷ !BatchConfig
   -- ^ Batch processing configuration.
-  , ctxBatchQueue ∷ !(TQueue QueuedTx)
-  -- ^ Batch queue.
-  , ctxLedgerStateVar ∷ !(TVar (State Bi Bo Ud A I))
-  -- ^ Current ledger state.
-  , ctxUtxoPreimageVar ∷ !(TVar (Leaves Ud (UTxO A I)))
-  -- ^ UTxO preimage.
-  , ctxTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
-  -- ^ Trusted setup for proof.
-  , ctxLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A Ixs Oxs TxCount)
-  -- ^ Ledger circuit.
-  , ctxProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
-  -- ^ Prover secret.
-  , ctxStatePersistPath ∷ !FilePath
-  -- ^ File path for persisting ledger state.
+  , ctxDbPath ∷ !FilePath
+  -- ^ SQLite database file path shared between server and batcher processes.
   }
 
 logDebug ∷ HasCallStack ⇒ Ctx → String → IO ()
