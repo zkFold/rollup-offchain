@@ -123,7 +123,7 @@ type BridgeInReqPrefix = "bir"
 
 data BridgeInRequest = BridgeInRequest
   { birAmount ∷ !GYValue
-  , birDestinationAddress ∷ !(Either GYAddressBech32 (FieldElement RollupBFInterpreter))
+  , birDestinationAddress ∷ !(FieldElement RollupBFInterpreter)
   , birUsedAddresses ∷ ![GYAddressBech32]
   , birChangeAddress ∷ !GYAddressBech32
   }

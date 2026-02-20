@@ -141,7 +141,7 @@ rollupUpdateTests setup =
             txBodyBridgeIn ←
               ctxRunBuilder ctx fundUser $
                 runReaderT
-                  (bridgeIn' [(address, valueFromLovelace 5_000_000)] >>= buildTxBody)
+                  (bridgeIn [(address, valueFromLovelace 5_000_000)] >>= buildTxBody)
                   initializedBuildInfo
             tidBridgeIn ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyBridgeIn
             info $ "Bridge in transaction submitted: " <> show tidBridgeIn

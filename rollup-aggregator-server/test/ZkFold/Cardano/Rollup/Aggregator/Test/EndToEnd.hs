@@ -126,7 +126,7 @@ endToEndTests setup =
                 birReq =
                   BridgeInRequest
                     { birAmount = bridgeInValue
-                    , birDestinationAddress = Right Ex3.address
+                    , birDestinationAddress = Ex3.address
                     , birUsedAddresses = [addressToBech32 (userAddr fundUser)]
                     , birChangeAddress = addressToBech32 (userAddr fundUser)
                     }

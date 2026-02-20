@@ -119,10 +119,7 @@ handleBridgeIn ctx BridgeInRequest {..} = do
   let usedAddrs = map addressFromBech32 birUsedAddresses
       changeAddr = addressFromBech32 birChangeAddress
 
-  txBody ← runSkeletonI ctx usedAddrs changeAddr Nothing $ do
-    case birDestinationAddress of
-      Left addrBech32 → bridgeIn [(addressFromBech32 addrBech32, birAmount)]
-      Right fe → bridgeIn' [(fe, birAmount)]
+  txBody ← runSkeletonI ctx usedAddrs changeAddr Nothing $ bridgeIn [(birDestinationAddress, birAmount)]
 
   let tx = unsignedTx txBody
 

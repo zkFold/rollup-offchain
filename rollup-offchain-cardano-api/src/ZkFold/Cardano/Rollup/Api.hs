@@ -4,7 +4,6 @@ module ZkFold.Cardano.Rollup.Api (
   registerRollupStake,
   updateRollupState,
   bridgeIn,
-  bridgeIn',
   utxosAtL2Address,
   byteStringToInteger',
   addressToBS,
@@ -12,16 +11,15 @@ module ZkFold.Cardano.Rollup.Api (
 
 import Control.Monad (forM, forM_, when)
 import Control.Monad.Reader
-import Data.Bifunctor (Bifunctor (..))
 import Data.Either (partitionEithers)
 import Data.Foldable (Foldable (..))
 import Data.Function ((&))
+import GHC.TypeNats (KnownNat)
 import GeniusYield.Api.TestTokens (mintTestTokens)
 import GeniusYield.Examples.Limbo (limboValidatorV2)
 import GeniusYield.TxBuilder
 import GeniusYield.Types
-import GHC.TypeNats (KnownNat)
-import ZkFold.Algebra.Class (FromConstant (..), ToConstant (toConstant))
+import ZkFold.Algebra.Class (ToConstant (toConstant))
 import ZkFold.Cardano.OnChain.Plonkup.Data (ProofBytes)
 import ZkFold.Cardano.Rollup.Constants
 import ZkFold.Cardano.Rollup.Types
@@ -32,11 +30,11 @@ import ZkFold.Cardano.UPLC.RollupSimple.Types (
   RollupState,
  )
 import ZkFold.Cardano.UPLC.RollupSimple.Utils (addressToBS, byteStringToInteger')
-import ZkFold.Protocol.Plonkup.OffChain.Cardano
 import ZkFold.Data.MerkleTree (Leaves, MerkleTreeSize)
 import ZkFold.Data.Vector (fromVector)
+import ZkFold.Protocol.Plonkup.OffChain.Cardano
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Ledger.Types (UTxO (..), Output (..), nullUTxO)
+import ZkFold.Symbolic.Ledger.Types (Output (..), UTxO (..), nullUTxO)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 
 -- | Get the rollup address.
@@ -136,12 +134,8 @@ registerRollupStake = do
           (GYTxBuildWitnessPlutusScript (GYBuildPlutusScriptReference zkirbiRollupStakeRef zkirbiRollupStake) unitRedeemer)
       )
 
-bridgeIn ∷ ZKRollupQueryMonad m ⇒ [(GYAddress, GYValue)] → m (GYTxSkeleton 'PlutusV3)
+bridgeIn ∷ ZKRollupQueryMonad m ⇒ [(FieldElement RollupBFInterpreter, GYValue)] → m (GYTxSkeleton 'PlutusV3)
 bridgeIn toBridgeIns = do
-  bridgeIn' $ first (fromConstant . byteStringToInteger' . addressToBS . addressToPlutus) <$> toBridgeIns
-
-bridgeIn' ∷ ZKRollupQueryMonad m ⇒ [(FieldElement RollupBFInterpreter, GYValue)] → m (GYTxSkeleton 'PlutusV3)
-bridgeIn' toBridgeIns = do
   rollupAddr ← rollupAddress
   pure $
     foldMap
