@@ -32,6 +32,7 @@ import GHC.Natural (Natural)
 import GeniusYield.Types (GYAddress, LowerFirst)
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Data.MerkleTree (Leaves)
+import ZkFold.Symbolic.Data.Hash (hHash)
 import ZkFold.Symbolic.Ledger.Types
 
 -- | State persisted to the SQLite database across restarts.
@@ -95,7 +96,7 @@ enqueueTxDb dbPath qtx addrs = withConn dbPath $ \conn →
   withTransaction conn $ do
     now ← getCurrentTime
     let payloadBytes = toStrict (encode qtx)
-        txHash = decodeUtf8 . toStrict . encode $ txId (qtTransaction qtx)
+        txHash = decodeUtf8 . toStrict . encode $ hHash (txId (qtTransaction qtx))
     execute
       conn
       "INSERT INTO txs (tx_hash, payload, status, submitted_at) VALUES (?, ?, 'pending', ?)"
