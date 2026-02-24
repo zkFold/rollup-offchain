@@ -155,8 +155,11 @@ type BatchesAPI =
 type BridgeOutsAPI =
   Summary "List bridge-outs for L1 address"
     :> Description
-        "Return all pending and batched bridge-out entries destined for the given L1 bech32 address. \
-        \Use this to check which bridge-out outputs are claimable on L1."
+        "Return all bridge-out entries destined for the given L1 bech32 address. \
+        \A bridge-out with status 'pending' or 'processing' is waiting to be included in a batch. \
+        \Once the batch proof is submitted on L1, the bridge-out outputs are delivered directly \
+        \to the recipient address as outputs of that same L1 transaction — no further action \
+        \is required from the user."
     :> "bridge"
     :> "out"
     :> QueryParam' '[Required, Strict] "l1address" GYAddressBech32
