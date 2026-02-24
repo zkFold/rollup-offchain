@@ -3,6 +3,14 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   initDb,
   enqueueTxDb,
   dequeueTxsDb,
+  recordBatchDb,
+  revertTxsDb,
+  getTxByIdDb,
+  getPendingTxsDb,
+  getTxsByAddressDb,
+  getBatchesDb,
+  getBatchByIdDb,
+  getPendingBridgeOutsDb,
   saveState,
   loadState,
 ) where
@@ -12,12 +20,16 @@ import Control.Monad (forM_)
 import Data.Aeson (eitherDecodeStrict, encode)
 import Data.ByteString.Lazy (toStrict)
 import Data.Int (Int64)
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import Data.Time.Clock (UTCTime, getCurrentTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Database.SQLite.Simple
 import Deriving.Aeson
 import GHC.Natural (Natural)
-import GeniusYield.Types (LowerFirst)
+import GeniusYield.Types (GYAddress, LowerFirst)
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Symbolic.Ledger.Types
@@ -37,6 +49,7 @@ withConn dbPath = bracket (open dbPath) close
 initDb ∷ FilePath → IO ()
 initDb dbPath = withConn dbPath $ \conn → do
   execute_ conn "PRAGMA journal_mode = WAL"
+  -- Keep old table for zero-downtime schema migration on existing DBs.
   execute_
     conn
     "CREATE TABLE IF NOT EXISTS pending_txs \
@@ -47,25 +60,60 @@ initDb dbPath = withConn dbPath $ \conn → do
     \(id INTEGER PRIMARY KEY CHECK (id = 1), \
     \ledger_state TEXT NOT NULL, \
     \utxo_preimage TEXT NOT NULL)"
+  execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS txs \
+    \(id INTEGER PRIMARY KEY AUTOINCREMENT, \
+    \payload TEXT NOT NULL, \
+    \status TEXT NOT NULL DEFAULT 'pending', \
+    \batch_id INTEGER, \
+    \submitted_at TEXT NOT NULL)"
+  execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS batches \
+    \(id INTEGER PRIMARY KEY AUTOINCREMENT, \
+    \l1_tx_id TEXT NOT NULL, \
+    \created_at TEXT NOT NULL, \
+    \tx_count INTEGER NOT NULL)"
+  execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS tx_addresses \
+    \(tx_id INTEGER NOT NULL REFERENCES txs(id), \
+    \l2_address TEXT NOT NULL)"
+  execute_
+    conn
+    "CREATE INDEX IF NOT EXISTS idx_tx_addresses ON tx_addresses(l2_address)"
 
--- | Enqueue a single transaction by inserting its JSON payload into the DB.
-enqueueTxDb ∷ FilePath → QueuedTx → IO ()
-enqueueTxDb dbPath qtx = withConn dbPath $ \conn →
-  execute conn "INSERT INTO pending_txs (payload) VALUES (?)" (Only (toText qtx))
+-- | Enqueue a single transaction. L2 addresses (JSON-encoded FieldElements) are
+-- stored in 'tx_addresses' for indexed lookup.
+enqueueTxDb ∷ FilePath → QueuedTx → [Text] → IO ()
+enqueueTxDb dbPath qtx addrs = withConn dbPath $ \conn →
+  withTransaction conn $ do
+    now ← getCurrentTime
+    execute
+      conn
+      "INSERT INTO txs (payload, status, submitted_at) VALUES (?, 'pending', ?)"
+      (toText qtx, formatTimestamp now)
+    rowId ← lastInsertRowId conn
+    forM_ addrs $ \addr →
+      execute
+        conn
+        "INSERT INTO tx_addresses (tx_id, l2_address) VALUES (?, ?)"
+        (rowId, addr)
  where
   toText ∷ QueuedTx → Text
   toText = decodeUtf8 . toStrict . encode
 
 -- | Atomically dequeue exactly @n@ transactions.
--- Returns 'Nothing' if fewer than @n@ are available (rows are NOT deleted).
--- Returns 'Just' the decoded transactions and deletes those rows otherwise.
-dequeueTxsDb ∷ FilePath → Natural → IO (Maybe [QueuedTx])
+-- Returns 'Nothing' if fewer than @n@ are available (rows stay 'pending').
+-- Otherwise marks them 'processing' and returns (id, QueuedTx) pairs.
+dequeueTxsDb ∷ FilePath → Natural → IO (Maybe [(Int64, QueuedTx)])
 dequeueTxsDb dbPath n = withConn dbPath $ \conn →
   withExclusiveTransaction conn $ do
     rows ∷ [(Int64, Text)] ←
       query
         conn
-        "SELECT id, payload FROM pending_txs ORDER BY id LIMIT ?"
+        "SELECT id, payload FROM txs WHERE status='pending' ORDER BY id LIMIT ?"
         (Only (fromIntegral n ∷ Int))
     if length rows < fromIntegral n
       then return Nothing
@@ -75,8 +123,164 @@ dequeueTxsDb dbPath n = withConn dbPath $ \conn →
           Left _ → return Nothing
           Right qtxs → do
             forM_ rows $ \(rowId, _) →
-              execute conn "DELETE FROM pending_txs WHERE id = ?" (Only rowId)
-            return (Just qtxs)
+              execute
+                conn
+                "UPDATE txs SET status='processing' WHERE id=?"
+                (Only rowId)
+            return (Just (zip (map fst rows) qtxs))
+
+-- | Record a successfully submitted batch: insert a 'batches' row and mark
+-- all included txs as 'batched'.
+recordBatchDb ∷ FilePath → [Int64] → Text → IO ()
+recordBatchDb dbPath ids l1TxId = withConn dbPath $ \conn →
+  withTransaction conn $ do
+    now ← getCurrentTime
+    execute
+      conn
+      "INSERT INTO batches (l1_tx_id, created_at, tx_count) VALUES (?, ?, ?)"
+      (l1TxId, formatTimestamp now, length ids)
+    batchId ← lastInsertRowId conn
+    forM_ ids $ \tid →
+      execute
+        conn
+        "UPDATE txs SET status='batched', batch_id=? WHERE id=?"
+        (batchId, tid)
+
+-- | Revert 'processing' txs back to 'pending' (called on batch failure).
+revertTxsDb ∷ FilePath → [Int64] → IO ()
+revertTxsDb dbPath ids = withConn dbPath $ \conn →
+  withTransaction conn $
+    forM_ ids $ \tid →
+      execute
+        conn
+        "UPDATE txs SET status='pending', batch_id=NULL WHERE id=?"
+        (Only tid)
+
+-- | Look up a single transaction by its DB id.
+getTxByIdDb ∷ FilePath → Int64 → IO (Maybe TxRecord)
+getTxByIdDb dbPath rowId = withConn dbPath $ \conn → do
+  rows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+    query
+      conn
+      "SELECT id, payload, status, batch_id, submitted_at FROM txs WHERE id=?"
+      (Only rowId)
+  case rows of
+    [row] → return (parseTxRow row)
+    _ → return Nothing
+
+-- | Return all currently pending transactions.
+getPendingTxsDb ∷ FilePath → IO [TxRecord]
+getPendingTxsDb dbPath = withConn dbPath $ \conn → do
+  rows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+    query_
+      conn
+      "SELECT id, payload, status, batch_id, submitted_at FROM txs WHERE status='pending' ORDER BY id"
+  return (catMaybes (map parseTxRow rows))
+
+-- | Paginated tx history for an L2 address (JSON-encoded FieldElement text).
+getTxsByAddressDb ∷ FilePath → Text → Natural → Natural → IO [TxRecord]
+getTxsByAddressDb dbPath l2addr limit offset = withConn dbPath $ \conn → do
+  rows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+    query
+      conn
+      "SELECT id, payload, status, batch_id, submitted_at \
+      \FROM txs \
+      \WHERE id IN (SELECT DISTINCT tx_id FROM tx_addresses WHERE l2_address=?) \
+      \ORDER BY id DESC LIMIT ? OFFSET ?"
+      (l2addr, fromIntegral limit ∷ Int, fromIntegral offset ∷ Int)
+  return (catMaybes (map parseTxRow rows))
+
+-- | Paginated batch list, newest first.
+getBatchesDb ∷ FilePath → Natural → Natural → IO [BatchRecord]
+getBatchesDb dbPath limit offset = withConn dbPath $ \conn → do
+  rows ∷ [(Int64, Text, Text, Int)] ←
+    query
+      conn
+      "SELECT id, l1_tx_id, created_at, tx_count FROM batches ORDER BY id DESC LIMIT ? OFFSET ?"
+      (fromIntegral limit ∷ Int, fromIntegral offset ∷ Int)
+  return (catMaybes (map parseBatchRow rows))
+
+-- | Look up a batch by id together with all its transactions.
+getBatchByIdDb ∷ FilePath → Int64 → IO (Maybe (BatchRecord, [TxRecord]))
+getBatchByIdDb dbPath batchId = withConn dbPath $ \conn → do
+  batchRows ∷ [(Int64, Text, Text, Int)] ←
+    query
+      conn
+      "SELECT id, l1_tx_id, created_at, tx_count FROM batches WHERE id=?"
+      (Only batchId)
+  case batchRows of
+    [brow] → case parseBatchRow brow of
+      Nothing → return Nothing
+      Just br → do
+        txRows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+          query
+            conn
+            "SELECT id, payload, status, batch_id, submitted_at FROM txs WHERE batch_id=? ORDER BY id"
+            (Only batchId)
+        let txs = catMaybes (map parseTxRow txRows)
+        return (Just (br, txs))
+    _ → return Nothing
+
+-- | Bridge-outs (pending + batched) for a given L1 address.
+-- Decodes each QueuedTx and filters bridge-out entries matching the address.
+getPendingBridgeOutsDb ∷ FilePath → GYAddress → IO [BridgeOutEntry]
+getPendingBridgeOutsDb dbPath targetAddr = withConn dbPath $ \conn → do
+  rows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+    query_
+      conn
+      "SELECT id, payload, status, batch_id, submitted_at \
+      \FROM txs WHERE status IN ('pending', 'batched') ORDER BY id"
+  let allTxs = catMaybes (map parseTxRow rows)
+  return $ do
+    tr ← allTxs
+    let qtx = trPayload tr
+    (val, addr) ← qtBridgeOuts qtx
+    if addr == targetAddr
+      then [BridgeOutEntry {boeTxId = trId tr, boeValue = val, boeStatus = trStatus tr}]
+      else []
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+formatTimestamp ∷ UTCTime → Text
+formatTimestamp = Text.pack . iso8601Show
+
+parseTimestamp ∷ Text → Maybe UTCTime
+parseTimestamp = iso8601ParseM . Text.unpack
+
+parseTxRow ∷ (Int64, Text, Text, Maybe Int64, Text) → Maybe TxRecord
+parseTxRow (rowId, payload, statusText, batchId, submittedAtText) = do
+  qtx ← case eitherDecodeStrict (encodeUtf8 payload) of
+    Right x → Just x
+    Left _ → Nothing
+  st ← txStatusFromText statusText
+  ts ← parseTimestamp submittedAtText
+  return
+    TxRecord
+      { trId = rowId
+      , trStatus = st
+      , trBatchId = batchId
+      , trSubmittedAt = ts
+      , trPayload = qtx
+      }
+
+parseBatchRow ∷ (Int64, Text, Text, Int) → Maybe BatchRecord
+parseBatchRow (rowId, l1TxId, createdAtText, txCount) = do
+  ts ← parseTimestamp createdAtText
+  return
+    BatchRecord
+      { brId = rowId
+      , brL1TxId = l1TxId
+      , brCreatedAt = ts
+      , brTxCount = txCount
+      }
+
+txStatusFromText ∷ Text → Maybe TxStatus
+txStatusFromText "pending" = Just TxPending
+txStatusFromText "processing" = Just TxProcessing
+txStatusFromText "batched" = Just TxBatched
+txStatusFromText _ = Nothing
 
 -- | Persist ledger state and UTxO preimage to the database (single-row upsert).
 saveState ∷ FilePath → State Bi Bo Ud A I → Leaves Ud (UTxO A I) → IO ()

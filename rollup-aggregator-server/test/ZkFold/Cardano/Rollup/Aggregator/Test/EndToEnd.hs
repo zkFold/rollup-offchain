@@ -170,8 +170,9 @@ endToEndTests setup =
             queuedTxs ← dequeueTxsDb dbPath txCount
             case queuedTxs of
               Nothing → assertFailure "No transactions in batch queue"
-              Just txs → do
-                tid ← processBatch aggCtx batcherState txs
+              Just pairs → do
+                let (ids, txs) = unzip pairs
+                tid ← processBatch aggCtx batcherState ids txs
                 info $ "Batch submitted: " <> show tid
 
             -- Step 6b: Query L2 UTxOs after batch 1
@@ -211,8 +212,9 @@ endToEndTests setup =
             queuedTxs2 ← dequeueTxsDb dbPath txCount
             case queuedTxs2 of
               Nothing → assertFailure "No transactions in batch queue"
-              Just txs → do
-                tid ← processBatch aggCtx batcherState txs
+              Just pairs2 → do
+                let (ids2, txs2) = unzip pairs2
+                tid ← processBatch aggCtx batcherState ids2 txs2
                 info $ "Batch submitted: " <> show tid
 
             -- Step 8b: Query L2 UTxOs after batch 2
