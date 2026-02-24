@@ -353,6 +353,8 @@ openapi: 3.0.0
 paths:
   /v0/batch/{id}:
     get:
+      description: Retrieve a single batch record by its database ID, including the
+        L1 transaction hash and the full list of L2 transactions bundled in that batch.
       parameters:
       - in: path
         name: id
@@ -371,10 +373,14 @@ paths:
           description: ''
         '404':
           description: '`id` not found'
+      summary: Get batch by ID
       tags:
       - Transaction indexing
   /v0/batches:
     get:
+      description: 'Return a paginated list of submitted batches, ordered newest first.
+        Each entry includes the L1 transaction hash and the number of L2 transactions
+        bundled. Defaults: limit = 20, offset = 0.'
       parameters:
       - in: query
         name: limit
@@ -399,10 +405,14 @@ paths:
           description: ''
         '400':
           description: Invalid `offset` or `limit`
+      summary: List batches
       tags:
       - Transaction indexing
   /v0/bridge/in:
     post:
+      description: Construct an unsigned L1 transaction that deposits ADA or native
+        tokens into the rollup at a given L2 address. The returned transaction must
+        be signed and submitted via POST /v0/l1/tx/submit.
       requestBody:
         content:
           application/json;charset=utf-8:
@@ -417,10 +427,14 @@ paths:
           description: ''
         '400':
           description: Invalid `body`
+      summary: Build bridge-in transaction
       tags:
       - Bridge
   /v0/bridge/out:
     get:
+      description: Return all pending and batched bridge-out entries destined for
+        the given L1 bech32 address. Use this to check which bridge-out outputs are
+        claimable on L1.
       parameters:
       - in: query
         name: l1address
@@ -439,10 +453,13 @@ paths:
           description: ''
         '400':
           description: Invalid `l1address`
+      summary: List bridge-outs for L1 address
       tags:
       - Bridge
   /v0/health:
     get:
+      description: Returns 200 OK when the server is operational. Use this endpoint
+        to verify the service is reachable before submitting transactions.
       responses:
         '200':
           content:
@@ -453,10 +470,13 @@ paths:
                 maxItems: 0
                 type: array
           description: ''
+      summary: Health check
       tags:
       - Settings
   /v0/l1/tx/submit:
     post:
+      description: Attach a witness to a previously built L1 transaction (e.g. a bridge-in)
+        and submit it to the Cardano network.
       requestBody:
         content:
           application/json;charset=utf-8:
@@ -471,10 +491,14 @@ paths:
           description: ''
         '400':
           description: Invalid `body`
+      summary: Submit signed L1 transaction
       tags:
       - L1 transactions
   /v0/tx:
     post:
+      description: Enqueue a signed L2 transaction for batching. The transaction is
+        validated (bridge-out count, addresses, and values are checked) then stored
+        with status 'pending' until the batcher picks it up.
       requestBody:
         content:
           application/json;charset=utf-8:
@@ -489,10 +513,14 @@ paths:
           description: ''
         '400':
           description: Invalid `body`
+      summary: Submit L2 transaction
       tags:
       - Transactions
   /v0/tx/{id}:
     get:
+      description: Retrieve a single queued transaction by its database ID, including
+        its current processing status ('pending', 'processing', or 'batched') and
+        the batch it was included in, if any.
       parameters:
       - in: path
         name: id
@@ -511,10 +539,14 @@ paths:
           description: ''
         '404':
           description: '`id` not found'
+      summary: Get transaction by ID
       tags:
       - Transaction indexing
   /v0/txs:
     get:
+      description: 'Return a paginated list of all transactions that have an output
+        destined for the given L2 address, ordered newest first. Defaults: limit =
+        20, offset = 0.'
       parameters:
       - in: query
         name: l2address
@@ -544,10 +576,13 @@ paths:
           description: ''
         '400':
           description: Invalid `offset` or `limit` or `l2address`
+      summary: Transaction history for L2 address
       tags:
       - Transaction indexing
   /v0/txs/pending:
     get:
+      description: Return all transactions currently waiting to be included in the
+        next batch (status = 'pending').
       responses:
         '200':
           content:
@@ -555,10 +590,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/PendingTxsResponse'
           description: ''
+      summary: List pending transactions
       tags:
       - Transaction indexing
   /v0/utxos:
     get:
+      description: Return all unspent transaction outputs at the given L2 address
+        according to the latest persisted ledger state.
       parameters:
       - in: query
         name: address
@@ -574,6 +612,7 @@ paths:
           description: ''
         '400':
           description: Invalid `address`
+      summary: Query L2 UTxOs by address
       tags:
       - L2 utxo queries
 tags:
