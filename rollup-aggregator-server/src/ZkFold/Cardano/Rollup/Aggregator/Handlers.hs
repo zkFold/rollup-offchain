@@ -25,6 +25,7 @@ import Data.Bifunctor (Bifunctor (..))
 import Data.ByteString.Lazy (toStrict)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
+import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.Natural (Natural)
@@ -56,7 +57,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   getBatchesDb,
   getPendingBridgeOutsDb,
   getPendingTxsDb,
-  getTxByIdDb,
+  getTxByHashDb,
   getTxsByAddressDb,
   loadState,
  )
@@ -119,8 +120,8 @@ handleSubmitTx ctx SubmitTxRequest {..} = do
             then throwIO $ err400 {errBody = "bridge-out value mismatch"}
             else do
               let bridgeOutPairs = map (second addressFromBech32) strBridgeOuts
-              enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs
-              pure $ SubmitTxResponse "queued"
+              txHash ← enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs
+              pure $ SubmitTxResponse "queued" txHash
  where
   validateAddr (out :*: _, (_, addrBech32)) =
     let addr = addressFromBech32 addrBech32
@@ -174,10 +175,10 @@ handleQueryL2Utxos ctx l2Addr = do
     Nothing → pure $ QueryL2UtxosResponse []
     Just ps → pure $ QueryL2UtxosResponse (utxosAtL2Address l2Addr (psUtxoPreimage ps))
 
--- | Handle single transaction lookup by DB id.
-handleGetTx ∷ Ctx → Int64 → IO TxResponse
-handleGetTx ctx txId = do
-  mTx ← getTxByIdDb (ctxDbPath ctx) txId
+-- | Handle single transaction lookup by hash.
+handleGetTx ∷ Ctx → Text → IO TxResponse
+handleGetTx ctx txHash = do
+  mTx ← getTxByHashDb (ctxDbPath ctx) txHash
   case mTx of
     Nothing → throwIO err404
     Just tr → pure (TxResponse tr)

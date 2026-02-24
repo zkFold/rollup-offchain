@@ -5,7 +5,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   dequeueTxsDb,
   recordBatchDb,
   revertTxsDb,
-  getTxByIdDb,
+  getTxByHashDb,
   getPendingTxsDb,
   getTxsByAddressDb,
   getBatchesDb,
@@ -64,10 +64,14 @@ initDb dbPath = withConn dbPath $ \conn → do
     conn
     "CREATE TABLE IF NOT EXISTS txs \
     \(id INTEGER PRIMARY KEY AUTOINCREMENT, \
+    \tx_hash TEXT NOT NULL UNIQUE, \
     \payload TEXT NOT NULL, \
     \status TEXT NOT NULL DEFAULT 'pending', \
     \batch_id INTEGER, \
     \submitted_at TEXT NOT NULL)"
+  execute_
+    conn
+    "CREATE INDEX IF NOT EXISTS idx_txs_hash ON txs(tx_hash)"
   execute_
     conn
     "CREATE TABLE IF NOT EXISTS batches \
@@ -84,25 +88,25 @@ initDb dbPath = withConn dbPath $ \conn → do
     conn
     "CREATE INDEX IF NOT EXISTS idx_tx_addresses ON tx_addresses(l2_address)"
 
--- | Enqueue a single transaction. L2 addresses (JSON-encoded FieldElements) are
--- stored in 'tx_addresses' for indexed lookup.
-enqueueTxDb ∷ FilePath → QueuedTx → [Text] → IO ()
+-- | Enqueue a single transaction. Computes SHA256 of the JSON payload as the
+-- transaction hash, stores L2 addresses for indexed lookup, and returns the hash.
+enqueueTxDb ∷ FilePath → QueuedTx → [Text] → IO Text
 enqueueTxDb dbPath qtx addrs = withConn dbPath $ \conn →
   withTransaction conn $ do
     now ← getCurrentTime
+    let payloadBytes = toStrict (encode qtx)
+        txHash = decodeUtf8 . toStrict . encode $ txId (qtTransaction qtx)
     execute
       conn
-      "INSERT INTO txs (payload, status, submitted_at) VALUES (?, 'pending', ?)"
-      (toText qtx, formatTimestamp now)
+      "INSERT INTO txs (tx_hash, payload, status, submitted_at) VALUES (?, ?, 'pending', ?)"
+      (txHash, decodeUtf8 payloadBytes, formatTimestamp now)
     rowId ← lastInsertRowId conn
     forM_ addrs $ \addr →
       execute
         conn
         "INSERT INTO tx_addresses (tx_id, l2_address) VALUES (?, ?)"
         (rowId, addr)
- where
-  toText ∷ QueuedTx → Text
-  toText = decodeUtf8 . toStrict . encode
+    return txHash
 
 -- | Atomically dequeue exactly @n@ transactions.
 -- Returns 'Nothing' if fewer than @n@ are available (rows stay 'pending').
@@ -156,14 +160,14 @@ revertTxsDb dbPath ids = withConn dbPath $ \conn →
         "UPDATE txs SET status='pending', batch_id=NULL WHERE id=?"
         (Only tid)
 
--- | Look up a single transaction by its DB id.
-getTxByIdDb ∷ FilePath → Int64 → IO (Maybe TxRecord)
-getTxByIdDb dbPath rowId = withConn dbPath $ \conn → do
-  rows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+-- | Look up a single transaction by its SHA256 hash.
+getTxByHashDb ∷ FilePath → Text → IO (Maybe TxRecord)
+getTxByHashDb dbPath txHash = withConn dbPath $ \conn → do
+  rows ∷ [(Int64, Text, Text, Text, Maybe Int64, Text)] ←
     query
       conn
-      "SELECT id, payload, status, batch_id, submitted_at FROM txs WHERE id=?"
-      (Only rowId)
+      "SELECT id, tx_hash, payload, status, batch_id, submitted_at FROM txs WHERE tx_hash=?"
+      (Only txHash)
   case rows of
     [row] → return (parseTxRow row)
     _ → return Nothing
@@ -171,19 +175,19 @@ getTxByIdDb dbPath rowId = withConn dbPath $ \conn → do
 -- | Return all currently pending transactions.
 getPendingTxsDb ∷ FilePath → IO [TxRecord]
 getPendingTxsDb dbPath = withConn dbPath $ \conn → do
-  rows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+  rows ∷ [(Int64, Text, Text, Text, Maybe Int64, Text)] ←
     query_
       conn
-      "SELECT id, payload, status, batch_id, submitted_at FROM txs WHERE status='pending' ORDER BY id"
+      "SELECT id, tx_hash, payload, status, batch_id, submitted_at FROM txs WHERE status='pending' ORDER BY id"
   return (catMaybes (map parseTxRow rows))
 
 -- | Paginated tx history for an L2 address (JSON-encoded FieldElement text).
 getTxsByAddressDb ∷ FilePath → Text → Natural → Natural → IO [TxRecord]
 getTxsByAddressDb dbPath l2addr limit offset = withConn dbPath $ \conn → do
-  rows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+  rows ∷ [(Int64, Text, Text, Text, Maybe Int64, Text)] ←
     query
       conn
-      "SELECT id, payload, status, batch_id, submitted_at \
+      "SELECT id, tx_hash, payload, status, batch_id, submitted_at \
       \FROM txs \
       \WHERE id IN (SELECT DISTINCT tx_id FROM tx_addresses WHERE l2_address=?) \
       \ORDER BY id DESC LIMIT ? OFFSET ?"
@@ -212,10 +216,10 @@ getBatchByIdDb dbPath batchId = withConn dbPath $ \conn → do
     [brow] → case parseBatchRow brow of
       Nothing → return Nothing
       Just br → do
-        txRows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+        txRows ∷ [(Int64, Text, Text, Text, Maybe Int64, Text)] ←
           query
             conn
-            "SELECT id, payload, status, batch_id, submitted_at FROM txs WHERE batch_id=? ORDER BY id"
+            "SELECT id, tx_hash, payload, status, batch_id, submitted_at FROM txs WHERE batch_id=? ORDER BY id"
             (Only batchId)
         let txs = catMaybes (map parseTxRow txRows)
         return (Just (br, txs))
@@ -225,10 +229,10 @@ getBatchByIdDb dbPath batchId = withConn dbPath $ \conn → do
 -- Decodes each QueuedTx and filters bridge-out entries matching the address.
 getPendingBridgeOutsDb ∷ FilePath → GYAddress → IO [BridgeOutEntry]
 getPendingBridgeOutsDb dbPath targetAddr = withConn dbPath $ \conn → do
-  rows ∷ [(Int64, Text, Text, Maybe Int64, Text)] ←
+  rows ∷ [(Int64, Text, Text, Text, Maybe Int64, Text)] ←
     query_
       conn
-      "SELECT id, payload, status, batch_id, submitted_at \
+      "SELECT id, tx_hash, payload, status, batch_id, submitted_at \
       \FROM txs WHERE status IN ('pending', 'batched') ORDER BY id"
   let allTxs = catMaybes (map parseTxRow rows)
   return $ do
@@ -236,7 +240,7 @@ getPendingBridgeOutsDb dbPath targetAddr = withConn dbPath $ \conn → do
     let qtx = trPayload tr
     (val, addr) ← qtBridgeOuts qtx
     if addr == targetAddr
-      then [BridgeOutEntry {boeTxId = trId tr, boeValue = val, boeStatus = trStatus tr}]
+      then [BridgeOutEntry {boeTxHash = trHash tr, boeValue = val, boeStatus = trStatus tr}]
       else []
 
 -- ---------------------------------------------------------------------------
@@ -249,8 +253,9 @@ formatTimestamp = Text.pack . iso8601Show
 parseTimestamp ∷ Text → Maybe UTCTime
 parseTimestamp = iso8601ParseM . Text.unpack
 
-parseTxRow ∷ (Int64, Text, Text, Maybe Int64, Text) → Maybe TxRecord
-parseTxRow (rowId, payload, statusText, batchId, submittedAtText) = do
+-- Column order: id, tx_hash, payload, status, batch_id, submitted_at
+parseTxRow ∷ (Int64, Text, Text, Text, Maybe Int64, Text) → Maybe TxRecord
+parseTxRow (rowId, txHash, payload, statusText, batchId, submittedAtText) = do
   qtx ← case eitherDecodeStrict (encodeUtf8 payload) of
     Right x → Just x
     Left _ → Nothing
@@ -259,6 +264,7 @@ parseTxRow (rowId, payload, statusText, batchId, submittedAtText) = do
   return
     TxRecord
       { trId = rowId
+      , trHash = txHash
       , trStatus = st
       , trBatchId = batchId
       , trSubmittedAt = ts

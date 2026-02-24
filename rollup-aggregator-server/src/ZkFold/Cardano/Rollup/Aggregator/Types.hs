@@ -116,8 +116,9 @@ instance ToSchema SubmitTxRequest where
 type SubmitTxResPrefix ∷ Symbol
 type SubmitTxResPrefix = "str"
 
-newtype SubmitTxResponse = SubmitTxResponse
-  { strStatus ∷ Text
+data SubmitTxResponse = SubmitTxResponse
+  { strStatus ∷ !Text
+  , strTxHash ∷ !Text
   }
   deriving stock Generic
   deriving
@@ -282,6 +283,7 @@ type TxRecordPrefix = "tr"
 
 data TxRecord = TxRecord
   { trId ∷ !Int64
+  , trHash ∷ !Text
   , trStatus ∷ !TxStatus
   , trBatchId ∷ !(Maybe Int64)
   , trSubmittedAt ∷ !UTCTime
@@ -451,7 +453,7 @@ type BridgeOutEntryPrefix ∷ Symbol
 type BridgeOutEntryPrefix = "boe"
 
 data BridgeOutEntry = BridgeOutEntry
-  { boeTxId ∷ !Int64
+  { boeTxHash ∷ !Text
   , boeValue ∷ !GYValue
   , boeStatus ∷ !TxStatus
   }

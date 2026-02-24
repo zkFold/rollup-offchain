@@ -15,6 +15,7 @@ import Data.Function ((&))
 import Data.Int (Int64)
 import Data.OpenApi
 import Data.OpenApi qualified as OpenApi
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Version (showVersion)
 import GHC.Natural (Natural)
@@ -94,15 +95,15 @@ type QueryL2UtxosAPI =
     :> QueryParam' '[Required, Strict] "address" (FieldElement RollupBFInterpreter)
     :> Get '[JSON] QueryL2UtxosResponse
 
--- | Get a single transaction by DB id.
+-- | Get a single transaction by its hash.
 type GetTxAPI =
-  Summary "Get transaction by ID"
+  Summary "Get transaction by hash"
     :> Description
-        "Retrieve a single queued transaction by its database ID, \
+        "Retrieve a single queued transaction by its hash (the JSON-encoded txId field element), \
         \including its current processing status ('pending', 'processing', or 'batched') \
         \and the batch it was included in, if any."
     :> "tx"
-    :> Capture "id" Int64
+    :> Capture "hash" Text
     :> Get '[JSON] TxResponse
 
 -- | Get all currently pending transactions.

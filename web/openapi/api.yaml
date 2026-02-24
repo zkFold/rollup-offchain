@@ -100,15 +100,12 @@ components:
       properties:
         status:
           $ref: '#/components/schemas/TxStatus'
-        tx_id:
-          format: int64
-          maximum: 9223372036854775807
-          minimum: -9223372036854775808
-          type: integer
+        tx_hash:
+          type: string
         value:
           $ref: '#/components/schemas/GYValue'
       required:
-      - tx_id
+      - tx_hash
       - value
       - status
       type: object
@@ -248,8 +245,11 @@ components:
       properties:
         status:
           type: string
+        tx_hash:
+          type: string
       required:
       - status
+      - tx_hash
       type: object
     Transaction_2_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
@@ -278,6 +278,8 @@ components:
           maximum: 9223372036854775807
           minimum: -9223372036854775808
           type: integer
+        hash:
+          type: string
         id:
           format: int64
           maximum: 9223372036854775807
@@ -291,6 +293,7 @@ components:
           $ref: '#/components/schemas/UTCTime'
       required:
       - id
+      - hash
       - status
       - submitted_at
       - payload
@@ -518,20 +521,17 @@ paths:
       summary: Submit L2 transaction
       tags:
       - Transactions
-  /v0/tx/{id}:
+  /v0/tx/{hash}:
     get:
-      description: Retrieve a single queued transaction by its database ID, including
-        its current processing status ('pending', 'processing', or 'batched') and
-        the batch it was included in, if any.
+      description: Retrieve a single queued transaction by its hash (the JSON-encoded
+        txId field element), including its current processing status ('pending', 'processing',
+        or 'batched') and the batch it was included in, if any.
       parameters:
       - in: path
-        name: id
+        name: hash
         required: true
         schema:
-          format: int64
-          maximum: 9223372036854775807
-          minimum: -9223372036854775808
-          type: integer
+          type: string
       responses:
         '200':
           content:
@@ -540,8 +540,8 @@ paths:
                 $ref: '#/components/schemas/TxResponse'
           description: ''
         '404':
-          description: '`id` not found'
-      summary: Get transaction by ID
+          description: '`hash` not found'
+      summary: Get transaction by hash
       tags:
       - Transaction indexing
   /v0/txs:

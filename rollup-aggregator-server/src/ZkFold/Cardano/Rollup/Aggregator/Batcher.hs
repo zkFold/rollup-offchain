@@ -26,6 +26,7 @@ import Data.Function ((&))
 import Data.Int (Int64)
 import Data.Maybe (catMaybes)
 import Data.Proxy (Proxy (..))
+import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8)
 import GHC.Generics ((:*:) (..), (:.:) (..))
@@ -130,8 +131,8 @@ initialState =
 
 -- | Enqueue a transaction by writing it to the SQLite database.
 -- L2 addresses are extracted from the transaction outputs and stored separately
--- for indexed lookup.
-enqueueTx ∷ Ctx → QueuedTx → IO ()
+-- for indexed lookup. Returns the transaction hash (JSON-encoded txId field element).
+enqueueTx ∷ Ctx → QueuedTx → IO Text
 enqueueTx ctx queued = do
   let outs = fromVector (unComp1 (outputs (qtTransaction queued)))
       addrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
