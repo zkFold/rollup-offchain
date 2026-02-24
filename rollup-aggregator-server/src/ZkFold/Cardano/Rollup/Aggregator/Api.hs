@@ -21,6 +21,7 @@ import Servant
 import Servant.OpenApi
 import ZkFold.Cardano.Rollup.Aggregator.Auth
 import ZkFold.Cardano.Rollup.Aggregator.Orphans ()
+import ZkFold.Cardano.Rollup.Aggregator.SwaggerUI (SwaggerUIAPI)
 import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest,
   BridgeInResponse,
@@ -57,11 +58,14 @@ type V0API =
     :<|> SubmitL1TxAPI
     :<|> QueryL2UtxosAPI
 
+-- | Serves the OpenAPI JSON specification.
+type OpenApiSpecAPI = "openapi.json" :> Get '[JSON] OpenApi
+
 -- | Aggregator API with version prefix.
 type AggregatorAPI = "v0" :> V0API
 
 -- | Main API including docs.
-type MainAPI = AggregatorAPI
+type MainAPI = AggregatorAPI :<|> OpenApiSpecAPI :<|> SwaggerUIAPI
 
 -- | Proxy for the aggregator API.
 aggregatorAPI ∷ Proxy AggregatorAPI

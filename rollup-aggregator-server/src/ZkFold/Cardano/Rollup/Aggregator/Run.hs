@@ -29,6 +29,7 @@ import ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware
 import ZkFold.Cardano.Rollup.Aggregator.Handlers (aggregatorServer)
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (initDb)
 import ZkFold.Cardano.Rollup.Aggregator.RequestLoggerMiddleware (gcpReqLogger)
+import ZkFold.Cardano.Rollup.Aggregator.SwaggerUI (swaggerUIHtml)
 import ZkFold.Cardano.Rollup.Aggregator.Utils
 import ZkFold.Cardano.Rollup.Constants (zkRollupBuildInfo)
 import ZkFold.Cardano.Rollup.Types (
@@ -82,10 +83,12 @@ withCtx mConfigPath action = do
             }
     action serverConfig ctx
 
-logConfig :: String -> (String -> b) -> Ctx -> ServerConfig -> b
+logConfig ∷ String → (String → b) → Ctx → ServerConfig → b
 logConfig tag logInfoS ctx serverConfig = do
   logInfoS $
-    "\n" <> tag <> " configuration: "
+    "\n"
+      <> tag
+      <> " configuration: "
       <> "\nPort: "
       <> show (scPort serverConfig)
       <> "\nAddress of wallet: "
@@ -155,7 +158,7 @@ runServer mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
               mainAPI
               (Proxy ∷ Proxy '[AuthHandler Wai.Request ()])
               (\ioAct → Handler . ExceptT $ first (apiErrorToServerError . exceptionHandler) <$> try ioAct)
-            $ aggregatorServer ctx
+            $ aggregatorServer ctx :<|> pure aggregatorAPIOpenApi :<|> pure swaggerUIHtml
 
 runBatcher ∷ Maybe FilePath → IO ()
 runBatcher mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
