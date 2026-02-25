@@ -151,7 +151,7 @@ endToEndTests setup =
                     , strSignatures = head perTxSigs
                     , strBridgeOuts = []
                     }
-            SubmitTxResponse status1 ← handleSubmitTx aggCtx strReq1
+            SubmitTxResponse {strStatus = status1} ← handleSubmitTx aggCtx strReq1
             assertEqual "L2 tx1 queued" "queued" status1
             info "L2 tx1 queued"
 
@@ -162,7 +162,7 @@ endToEndTests setup =
                     , strSignatures = perTxSigs !! 1
                     , strBridgeOuts = []
                     }
-            SubmitTxResponse status2 ← handleSubmitTx aggCtx strReq2
+            SubmitTxResponse {strStatus = status2} ← handleSubmitTx aggCtx strReq2
             assertEqual "L2 tx2 queued" "queued" status2
             info "L2 tx2 queued"
 
@@ -170,8 +170,9 @@ endToEndTests setup =
             queuedTxs ← dequeueTxsDb dbPath txCount
             case queuedTxs of
               Nothing → assertFailure "No transactions in batch queue"
-              Just txs → do
-                tid ← processBatch aggCtx batcherState txs
+              Just pairs → do
+                let (ids, txs) = unzip pairs
+                tid ← processBatch aggCtx batcherState ids txs
                 info $ "Batch submitted: " <> show tid
 
             -- Step 6b: Query L2 UTxOs after batch 1
@@ -193,7 +194,7 @@ endToEndTests setup =
                     , strSignatures = head perTxSigs2
                     , strBridgeOuts = [(bridgeOutValue, bridgeOutAddr)]
                     }
-            SubmitTxResponse status3 ← handleSubmitTx aggCtx strReq3
+            SubmitTxResponse {strStatus = status3} ← handleSubmitTx aggCtx strReq3
             assertEqual "L2 tx3 queued" "queued" status3
             info "L2 tx3 queued"
 
@@ -204,15 +205,16 @@ endToEndTests setup =
                     , strSignatures = perTxSigs2 !! 1
                     , strBridgeOuts = []
                     }
-            SubmitTxResponse status4 ← handleSubmitTx aggCtx strReq4
+            SubmitTxResponse {strStatus = status4} ← handleSubmitTx aggCtx strReq4
             assertEqual "L2 tx4 queued" "queued" status4
             info "L2 tx4 queued"
 
             queuedTxs2 ← dequeueTxsDb dbPath txCount
             case queuedTxs2 of
               Nothing → assertFailure "No transactions in batch queue"
-              Just txs → do
-                tid ← processBatch aggCtx batcherState txs
+              Just pairs2 → do
+                let (ids2, txs2) = unzip pairs2
+                tid ← processBatch aggCtx batcherState ids2 txs2
                 info $ "Batch submitted: " <> show tid
 
             -- Step 8b: Query L2 UTxOs after batch 2

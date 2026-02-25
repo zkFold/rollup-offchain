@@ -24,6 +24,7 @@ instance FromHttpApiData (FieldElement RollupBFInterpreter) where
     Nothing → Left $ "Invalid field element (expected non-negative integer): " <> t
     Just n → Right $ fromConstant (n ∷ Natural)
 
+
 instance HasOpenApi api ⇒ HasOpenApi (APIKeyAuthProtect :> api) where
   toOpenApi _ =
     toOpenApi (Proxy ∷ Proxy api)

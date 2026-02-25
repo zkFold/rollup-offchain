@@ -12,10 +12,13 @@ module ZkFold.Cardano.Rollup.Aggregator.Api (
 
 import Control.Lens ((.~), (?~))
 import Data.Function ((&))
+import Data.Int (Int64)
 import Data.OpenApi
 import Data.OpenApi qualified as OpenApi
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Version (showVersion)
+import GHC.Natural (Natural)
 import PackageInfo_rollup_aggregator_server qualified as PackageInfo
 import Servant
 import Servant.OpenApi
@@ -23,32 +26,146 @@ import ZkFold.Cardano.Rollup.Aggregator.Auth
 import ZkFold.Cardano.Rollup.Aggregator.Orphans ()
 import ZkFold.Cardano.Rollup.Aggregator.SwaggerUI (SwaggerUIAPI)
 import ZkFold.Cardano.Rollup.Aggregator.Types (
+  BatchDetailResponse,
+  BatchesResponse,
   BridgeInRequest,
   BridgeInResponse,
+  BridgeOutsResponse,
+  PendingTxsResponse,
   QueryL2UtxosResponse,
   SubmitL1TxRequest,
   SubmitL1TxResponse,
   SubmitTxRequest,
   SubmitTxResponse,
+  TxResponse,
+  TxsByAddressResponse,
  )
+import GeniusYield.Types (GYAddressBech32)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 
 -- | Health check endpoint.
-type HealthAPI = "health" :> Get '[JSON] ()
+type HealthAPI =
+  Summary "Health check"
+    :> Description
+        "Returns 200 OK when the server is operational. \
+        \Use this endpoint to verify the service is reachable before submitting transactions."
+    :> "health"
+    :> Get '[JSON] ()
 
 -- | Submit a single L2 transaction.
-type SubmitTxAPI = "tx" :> ReqBody '[JSON] SubmitTxRequest :> Post '[JSON] SubmitTxResponse
+type SubmitTxAPI =
+  Summary "Submit L2 transaction"
+    :> Description
+        "Enqueue a signed L2 transaction for batching. \
+        \The transaction is validated (bridge-out count, addresses, and values are checked) \
+        \then stored with status 'pending' until the batcher picks it up."
+    :> "tx"
+    :> ReqBody '[JSON] SubmitTxRequest
+    :> Post '[JSON] SubmitTxResponse
 
-type BridgeInAPI = "bridge" :> "in" :> ReqBody '[JSON] BridgeInRequest :> Post '[JSON] BridgeInResponse
+type BridgeInAPI =
+  Summary "Build bridge-in transaction"
+    :> Description
+        "Construct an unsigned L1 transaction that deposits ADA or native tokens into the rollup \
+        \at a given L2 address. The returned transaction must be signed and submitted via \
+        \POST /v0/l1/tx/submit."
+    :> "bridge"
+    :> "in"
+    :> ReqBody '[JSON] BridgeInRequest
+    :> Post '[JSON] BridgeInResponse
 
-type SubmitL1TxAPI = "l1" :> "tx" :> "submit" :> ReqBody '[JSON] SubmitL1TxRequest :> Post '[JSON] SubmitL1TxResponse
+type SubmitL1TxAPI =
+  Summary "Submit signed L1 transaction"
+    :> Description
+        "Attach a witness to a previously built L1 transaction (e.g. a bridge-in) \
+        \and submit it to the Cardano network."
+    :> "l1"
+    :> "tx"
+    :> "submit"
+    :> ReqBody '[JSON] SubmitL1TxRequest
+    :> Post '[JSON] SubmitL1TxResponse
 
 -- | Query UTxOs at a given L2 address.
 type QueryL2UtxosAPI =
-  "utxos"
+  Summary "Query L2 UTxOs by address"
+    :> Description
+        "Return all unspent transaction outputs at the given L2 address \
+        \according to the latest persisted ledger state."
+    :> "utxos"
     :> QueryParam' '[Required, Strict] "address" (FieldElement RollupBFInterpreter)
     :> Get '[JSON] QueryL2UtxosResponse
+
+-- | Get a single transaction by its hash.
+type GetTxAPI =
+  Summary "Get transaction by hash"
+    :> Description
+        "Retrieve a single queued transaction by its hash (the JSON-encoded txId field element), \
+        \including its current processing status ('pending', 'processing', or 'batched') \
+        \and the batch it was included in, if any."
+    :> "tx"
+    :> Capture "hash" Text
+    :> Get '[JSON] TxResponse
+
+-- | Get all currently pending transactions.
+type PendingTxsAPI =
+  Summary "List pending transactions"
+    :> Description
+        "Return all transactions currently waiting to be included in the next batch \
+        \(status = 'pending')."
+    :> "txs"
+    :> "pending"
+    :> Get '[JSON] PendingTxsResponse
+
+-- | Get tx history for an L2 address with pagination.
+type TxsByAddressAPI =
+  Summary "Transaction history for L2 address"
+    :> Description
+        "Return a paginated list of all transactions that have an output destined for \
+        \the given L2 address, ordered newest first. \
+        \Defaults: limit = 20, offset = 0."
+    :> "txs"
+    :> QueryParam' '[Required, Strict] "l2address" (FieldElement RollupBFInterpreter)
+    :> QueryParam "limit" Natural
+    :> QueryParam "offset" Natural
+    :> Get '[JSON] TxsByAddressResponse
+
+-- | Get a single batch by DB id with included transactions.
+type GetBatchAPI =
+  Summary "Get batch by ID"
+    :> Description
+        "Retrieve a single batch record by its database ID, \
+        \including the L1 transaction hash and the full list of L2 transactions \
+        \bundled in that batch."
+    :> "batch"
+    :> Capture "id" Int64
+    :> Get '[JSON] BatchDetailResponse
+
+-- | Get paginated batch list.
+type BatchesAPI =
+  Summary "List batches"
+    :> Description
+        "Return a paginated list of submitted batches, ordered newest first. \
+        \Each entry includes the L1 transaction hash and the number of L2 transactions bundled. \
+        \Defaults: limit = 20, offset = 0."
+    :> "batches"
+    :> QueryParam "limit" Natural
+    :> QueryParam "offset" Natural
+    :> Get '[JSON] BatchesResponse
+
+-- | Get bridge-outs (pending + batched) for an L1 address.
+type BridgeOutsAPI =
+  Summary "List bridge-outs for L1 address"
+    :> Description
+        "Return all bridge-out entries destined for the given L1 bech32 address. \
+        \A bridge-out with status 'pending' or 'processing' is waiting to be included in a batch. \
+        \Once the batch proof is submitted on L1, the bridge-out outputs are delivered directly \
+        \to the recipient address as outputs of that same L1 transaction — no further action \
+        \is required from the user."
+    :> "bridge"
+    :> "out"
+    :> QueryParam' '[Required, Strict] "l1address" GYAddressBech32
+    :> Get '[JSON] BridgeOutsResponse
 
 -- | V0 API - combines all endpoints.
 type V0API =
@@ -57,6 +174,12 @@ type V0API =
     :<|> BridgeInAPI
     :<|> SubmitL1TxAPI
     :<|> QueryL2UtxosAPI
+    :<|> GetTxAPI
+    :<|> PendingTxsAPI
+    :<|> TxsByAddressAPI
+    :<|> GetBatchAPI
+    :<|> BatchesAPI
+    :<|> BridgeOutsAPI
 
 -- | Serves the OpenAPI JSON specification.
 type OpenApiSpecAPI = "openapi.json" :> Get '[JSON] OpenApi
@@ -116,3 +239,21 @@ aggregatorAPIOpenApi =
     & OpenApi.applyTagsFor
       (subOperations (Proxy ∷ Proxy (V0 :> QueryL2UtxosAPI)) (Proxy ∷ Proxy AggregatorAPI))
       ["L2 utxo queries" & OpenApi.description ?~ "Query L2 UTxO state."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> GetTxAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["Transaction indexing" & OpenApi.description ?~ "Query transaction and batch history."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> PendingTxsAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["Transaction indexing" & OpenApi.description ?~ "Query transaction and batch history."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> TxsByAddressAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["Transaction indexing" & OpenApi.description ?~ "Query transaction and batch history."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> GetBatchAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["Transaction indexing" & OpenApi.description ?~ "Query transaction and batch history."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> BatchesAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["Transaction indexing" & OpenApi.description ?~ "Query transaction and batch history."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> BridgeOutsAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["Bridge" & OpenApi.description ?~ "Bridge operations."]

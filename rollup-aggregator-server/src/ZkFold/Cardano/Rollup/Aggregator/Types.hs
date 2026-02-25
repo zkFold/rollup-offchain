@@ -20,13 +20,28 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
   QueryL2UtxosResponse (..),
+
+  -- * Indexing Types
+  TxStatus (..),
+  TxRecord (..),
+  BatchRecord (..),
+  PendingTxsResponse (..),
+  TxResponse (..),
+  TxsByAddressResponse (..),
+  BatchesResponse (..),
+  BatchDetailResponse (..),
+  BridgeOutEntry (..),
+  BridgeOutsResponse (..),
 ) where
 
 import Control.Lens ((?~))
+import Data.Char (toLower)
 import Data.Function ((&))
-import Data.OpenApi (ToSchema)
+import Data.Int (Int64)
+import Data.OpenApi (NamedSchema (..), ToSchema)
 import Data.OpenApi qualified as OpenApi
 import Data.Text (Text)
+import Data.Time.Clock (UTCTime)
 import Deriving.Aeson
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeLits (Symbol)
@@ -70,6 +85,9 @@ data QueuedTx = QueuedTx
     (FromJSON, ToJSON)
     via CustomJSON '[FieldLabelModifier '[StripPrefix "qt", LowerFirst]] QueuedTx
 
+instance ToSchema QueuedTx where
+  declareNamedSchema _ = return $ NamedSchema (Just "QueuedTx") mempty
+
 type SubmitTxReqPrefix ∷ Symbol
 type SubmitTxReqPrefix = "str"
 
@@ -98,8 +116,9 @@ instance ToSchema SubmitTxRequest where
 type SubmitTxResPrefix ∷ Symbol
 type SubmitTxResPrefix = "str"
 
-newtype SubmitTxResponse = SubmitTxResponse
-  { strStatus ∷ Text
+data SubmitTxResponse = SubmitTxResponse
+  { strStatus ∷ !Text
+  , strTxHash ∷ !Text
   }
   deriving stock Generic
   deriving
@@ -236,3 +255,244 @@ instance ToSchema QueryL2UtxosResponse where
     return $
       schema
         & OpenApi.schema . OpenApi.description ?~ "Response containing UTxOs at the given L2 address"
+
+-- ---------------------------------------------------------------------------
+-- Indexing Types
+-- ---------------------------------------------------------------------------
+
+data TxStatus = TxPending | TxProcessing | TxBatched
+  deriving stock (Eq, Show, Generic)
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[ConstructorTagModifier '[StripPrefix "Tx", LowerFirst]] TxStatus
+
+instance ToSchema TxStatus where
+  declareNamedSchema proxy =
+    OpenApi.genericDeclareNamedSchema
+      OpenApi.defaultSchemaOptions
+        { OpenApi.constructorTagModifier = go
+        }
+      proxy
+   where
+    go s = case drop 2 s of
+      [] → []
+      (c : cs) → toLower c : cs
+
+type TxRecordPrefix ∷ Symbol
+type TxRecordPrefix = "tr"
+
+data TxRecord = TxRecord
+  { trId ∷ !Int64
+  , trHash ∷ !Text
+  , trStatus ∷ !TxStatus
+  , trBatchId ∷ !(Maybe Int64)
+  , trSubmittedAt ∷ !UTCTime
+  , trPayload ∷ !QueuedTx
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxRecordPrefix, LowerFirst]] TxRecord
+
+instance ToSchema TxRecord where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @TxRecordPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "A transaction record with status information"
+
+type BatchRecordPrefix ∷ Symbol
+type BatchRecordPrefix = "br"
+
+data BatchRecord = BatchRecord
+  { brId ∷ !Int64
+  , brL1TxId ∷ !Text
+  , brCreatedAt ∷ !UTCTime
+  , brTxCount ∷ !Int
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchRecordPrefix, LowerFirst]] BatchRecord
+
+instance ToSchema BatchRecord where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @BatchRecordPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "A batch record with L1 transaction info"
+
+type PendingTxsResPrefix ∷ Symbol
+type PendingTxsResPrefix = "ptr"
+
+newtype PendingTxsResponse = PendingTxsResponse
+  { ptrTxs ∷ [TxRecord]
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix PendingTxsResPrefix, LowerFirst]] PendingTxsResponse
+
+instance ToSchema PendingTxsResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @PendingTxsResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Response containing all pending transactions"
+
+type TxResPrefix ∷ Symbol
+type TxResPrefix = "txr"
+
+newtype TxResponse = TxResponse
+  { txrRecord ∷ TxRecord
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxResPrefix, LowerFirst]] TxResponse
+
+instance ToSchema TxResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @TxResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Response containing a single transaction"
+
+type TxsByAddressResPrefix ∷ Symbol
+type TxsByAddressResPrefix = "tar"
+
+data TxsByAddressResponse = TxsByAddressResponse
+  { tarTotal ∷ !Int
+  , tarTxs ∷ ![TxRecord]
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxsByAddressResPrefix, LowerFirst]] TxsByAddressResponse
+
+instance ToSchema TxsByAddressResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @TxsByAddressResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Response containing transactions for an L2 address"
+
+type BatchesResPrefix ∷ Symbol
+type BatchesResPrefix = "brsr"
+
+newtype BatchesResponse = BatchesResponse
+  { brsrBatches ∷ [BatchRecord]
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchesResPrefix, LowerFirst]] BatchesResponse
+
+instance ToSchema BatchesResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @BatchesResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Response containing paginated batch list"
+
+type BatchDetailResPrefix ∷ Symbol
+type BatchDetailResPrefix = "bdr"
+
+data BatchDetailResponse = BatchDetailResponse
+  { bdrBatch ∷ !BatchRecord
+  , bdrTxs ∷ ![TxRecord]
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchDetailResPrefix, LowerFirst]] BatchDetailResponse
+
+instance ToSchema BatchDetailResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @BatchDetailResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Response containing batch detail with included transactions"
+
+type BridgeOutEntryPrefix ∷ Symbol
+type BridgeOutEntryPrefix = "boe"
+
+data BridgeOutEntry = BridgeOutEntry
+  { boeTxHash ∷ !Text
+  , boeValue ∷ !GYValue
+  , boeStatus ∷ !TxStatus
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeOutEntryPrefix, LowerFirst]] BridgeOutEntry
+
+instance ToSchema BridgeOutEntry where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @BridgeOutEntryPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "A bridge-out entry with value and status"
+
+type BridgeOutsResPrefix ∷ Symbol
+type BridgeOutsResPrefix = "bor"
+
+newtype BridgeOutsResponse = BridgeOutsResponse
+  { borEntries ∷ [BridgeOutEntry]
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeOutsResPrefix, LowerFirst]] BridgeOutsResponse
+
+instance ToSchema BridgeOutsResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @BridgeOutsResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Response containing bridge-out entries for an L1 address"

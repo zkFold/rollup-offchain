@@ -23,6 +23,51 @@ components:
       - assetName
       - assetQuantity
       type: object
+    BatchDetailResponse:
+      description: Response containing batch detail with included transactions
+      properties:
+        batch:
+          $ref: '#/components/schemas/BatchRecord'
+        txs:
+          items:
+            $ref: '#/components/schemas/TxRecord'
+          type: array
+      required:
+      - batch
+      - txs
+      type: object
+    BatchRecord:
+      description: A batch record with L1 transaction info
+      properties:
+        created_at:
+          $ref: '#/components/schemas/UTCTime'
+        id:
+          format: int64
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          type: integer
+        l1_tx_id:
+          type: string
+        tx_count:
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          type: integer
+      required:
+      - id
+      - l1_tx_id
+      - created_at
+      - tx_count
+      type: object
+    BatchesResponse:
+      description: Response containing paginated batch list
+      properties:
+        batches:
+          items:
+            $ref: '#/components/schemas/BatchRecord'
+          type: array
+      required:
+      - batches
+      type: object
     BridgeInRequest:
       description: Request parameters to bridge-in funds
       properties:
@@ -49,6 +94,30 @@ components:
           $ref: '#/components/schemas/GYTx'
       required:
       - transaction
+      type: object
+    BridgeOutEntry:
+      description: A bridge-out entry with value and status
+      properties:
+        status:
+          $ref: '#/components/schemas/TxStatus'
+        tx_hash:
+          type: string
+        value:
+          $ref: '#/components/schemas/GYValue'
+      required:
+      - tx_hash
+      - value
+      - status
+      type: object
+    BridgeOutsResponse:
+      description: Response containing bridge-out entries for an L1 address
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/BridgeOutEntry'
+          type: array
+      required:
+      - entries
       type: object
     GYAddressBech32:
       description: An address, serialised as Bech32.
@@ -98,6 +167,16 @@ components:
       - oAddress
       - oAssets
       type: object
+    PendingTxsResponse:
+      description: Response containing all pending transactions
+      properties:
+        txs:
+          items:
+            $ref: '#/components/schemas/TxRecord'
+          type: array
+      required:
+      - txs
+      type: object
     QueryL2UtxosResponse:
       description: Response containing UTxOs at the given L2 address
       properties:
@@ -108,6 +187,7 @@ components:
       required:
       - utxos
       type: object
+    QueuedTx: {}
     SubmitL1TxRequest:
       description: Request parameters to submit the L1 transaction
       properties:
@@ -165,8 +245,11 @@ components:
       properties:
         status:
           type: string
+        tx_hash:
+          type: string
       required:
       - status
+      - tx_hash
       type: object
     Transaction_2_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
@@ -187,6 +270,67 @@ components:
       - inputs
       - outputs
       type: object
+    TxRecord:
+      description: A transaction record with status information
+      properties:
+        batch_id:
+          format: int64
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          type: integer
+        hash:
+          type: string
+        id:
+          format: int64
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          type: integer
+        payload:
+          $ref: '#/components/schemas/QueuedTx'
+        status:
+          $ref: '#/components/schemas/TxStatus'
+        submitted_at:
+          $ref: '#/components/schemas/UTCTime'
+      required:
+      - id
+      - hash
+      - status
+      - submitted_at
+      - payload
+      type: object
+    TxResponse:
+      description: Response containing a single transaction
+      properties:
+        record:
+          $ref: '#/components/schemas/TxRecord'
+      required:
+      - record
+      type: object
+    TxStatus:
+      enum:
+      - pending
+      - processing
+      - batched
+      type: string
+    TxsByAddressResponse:
+      description: Response containing transactions for an L2 address
+      properties:
+        total:
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          type: integer
+        txs:
+          items:
+            $ref: '#/components/schemas/TxRecord'
+          type: array
+      required:
+      - total
+      - txs
+      type: object
+    UTCTime:
+      example: 2016-07-22T00:00:00Z
+      format: yyyy-mm-ddThh:MM:ssZ
+      type: string
     UTxO_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
         uOutput:
@@ -210,8 +354,68 @@ info:
   version: 0.1.0.0
 openapi: 3.0.0
 paths:
+  /v0/batch/{id}:
+    get:
+      description: Retrieve a single batch record by its database ID, including the
+        L1 transaction hash and the full list of L2 transactions bundled in that batch.
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: int64
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/BatchDetailResponse'
+          description: ''
+        '404':
+          description: '`id` not found'
+      summary: Get batch by ID
+      tags:
+      - Transaction indexing
+  /v0/batches:
+    get:
+      description: 'Return a paginated list of submitted batches, ordered newest first.
+        Each entry includes the L1 transaction hash and the number of L2 transactions
+        bundled. Defaults: limit = 20, offset = 0.'
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+      - in: query
+        name: offset
+        required: false
+        schema:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/BatchesResponse'
+          description: ''
+        '400':
+          description: Invalid `offset` or `limit`
+      summary: List batches
+      tags:
+      - Transaction indexing
   /v0/bridge/in:
     post:
+      description: Construct an unsigned L1 transaction that deposits ADA or native
+        tokens into the rollup at a given L2 address. The returned transaction must
+        be signed and submitted via POST /v0/l1/tx/submit.
       requestBody:
         content:
           application/json;charset=utf-8:
@@ -226,10 +430,41 @@ paths:
           description: ''
         '400':
           description: Invalid `body`
+      summary: Build bridge-in transaction
+      tags:
+      - Bridge
+  /v0/bridge/out:
+    get:
+      description: Return all bridge-out entries destined for the given L1 bech32
+        address. A bridge-out with status 'pending' or 'processing' is waiting to
+        be included in a batch. Once the batch proof is submitted on L1, the bridge-out
+        outputs are delivered directly to the recipient address as outputs of that
+        same L1 transaction — no further action is required from the user.
+      parameters:
+      - in: query
+        name: l1address
+        required: true
+        schema:
+          description: An address, serialised as Bech32.
+          example: addr_test1qrsuhwqdhz0zjgnf46unas27h93amfghddnff8lpc2n28rgmjv8f77ka0zshfgssqr5cnl64zdnde5f8q2xt923e7ctqu49mg5
+          format: bech32
+          type: string
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/BridgeOutsResponse'
+          description: ''
+        '400':
+          description: Invalid `l1address`
+      summary: List bridge-outs for L1 address
       tags:
       - Bridge
   /v0/health:
     get:
+      description: Returns 200 OK when the server is operational. Use this endpoint
+        to verify the service is reachable before submitting transactions.
       responses:
         '200':
           content:
@@ -240,10 +475,13 @@ paths:
                 maxItems: 0
                 type: array
           description: ''
+      summary: Health check
       tags:
       - Settings
   /v0/l1/tx/submit:
     post:
+      description: Attach a witness to a previously built L1 transaction (e.g. a bridge-in)
+        and submit it to the Cardano network.
       requestBody:
         content:
           application/json;charset=utf-8:
@@ -258,10 +496,14 @@ paths:
           description: ''
         '400':
           description: Invalid `body`
+      summary: Submit signed L1 transaction
       tags:
       - L1 transactions
   /v0/tx:
     post:
+      description: Enqueue a signed L2 transaction for batching. The transaction is
+        validated (bridge-out count, addresses, and values are checked) then stored
+        with status 'pending' until the batcher picks it up.
       requestBody:
         content:
           application/json;charset=utf-8:
@@ -276,10 +518,87 @@ paths:
           description: ''
         '400':
           description: Invalid `body`
+      summary: Submit L2 transaction
       tags:
       - Transactions
+  /v0/tx/{hash}:
+    get:
+      description: Retrieve a single queued transaction by its hash (the JSON-encoded
+        txId field element), including its current processing status ('pending', 'processing',
+        or 'batched') and the batch it was included in, if any.
+      parameters:
+      - in: path
+        name: hash
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TxResponse'
+          description: ''
+        '404':
+          description: '`hash` not found'
+      summary: Get transaction by hash
+      tags:
+      - Transaction indexing
+  /v0/txs:
+    get:
+      description: 'Return a paginated list of all transactions that have an output
+        destined for the given L2 address, ordered newest first. Defaults: limit =
+        20, offset = 0.'
+      parameters:
+      - in: query
+        name: l2address
+        required: true
+        schema:
+          type: integer
+      - in: query
+        name: limit
+        required: false
+        schema:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+      - in: query
+        name: offset
+        required: false
+        schema:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TxsByAddressResponse'
+          description: ''
+        '400':
+          description: Invalid `offset` or `limit` or `l2address`
+      summary: Transaction history for L2 address
+      tags:
+      - Transaction indexing
+  /v0/txs/pending:
+    get:
+      description: Return all transactions currently waiting to be included in the
+        next batch (status = 'pending').
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PendingTxsResponse'
+          description: ''
+      summary: List pending transactions
+      tags:
+      - Transaction indexing
   /v0/utxos:
     get:
+      description: Return all unspent transaction outputs at the given L2 address
+        according to the latest persisted ledger state.
       parameters:
       - in: query
         name: address
@@ -295,6 +614,7 @@ paths:
           description: ''
         '400':
           description: Invalid `address`
+      summary: Query L2 UTxOs by address
       tags:
       - L2 utxo queries
 tags:
@@ -308,3 +628,5 @@ tags:
   name: L1 transactions
 - description: Query L2 UTxO state.
   name: L2 utxo queries
+- description: Query transaction and batch history.
+  name: Transaction indexing

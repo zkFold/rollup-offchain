@@ -8,16 +8,30 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
   handleBridgeIn,
   handleSubmitL1Tx,
   handleQueryL2Utxos,
+  handleGetTx,
+  handlePendingTxs,
+  handleTxsByAddress,
+  handleGetBatch,
+  handleBatches,
+  handleBridgeOuts,
 
   -- * Validation (exported for testing)
   matchesBridgeOutValue,
 ) where
 
 import Control.Exception (throwIO)
+import Data.Aeson (encode)
 import Data.Bifunctor (Bifunctor (..))
+import Data.ByteString.Lazy (toStrict)
+import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
+import Data.Text (Text)
+import Data.Text.Encoding (decodeUtf8)
 import GHC.Generics ((:*:) (..), (:.:) (..))
+import GHC.Natural (Natural)
 import GHC.TypeNats (KnownNat)
 import GeniusYield.Types (
+  GYAddressBech32,
   GYValue,
   addressFromBech32,
   addressToPlutus,
@@ -29,7 +43,7 @@ import GeniusYield.Types (
  )
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..))
 import PlutusLedgerApi.V1.Value qualified as Plutus
-import Servant (ServerError (..), ServerT, err400, (:<|>) (..))
+import Servant (ServerError (..), ServerT, err400, err404, (:<|>) (..))
 import ZkFold.Algebra.Class (fromConstant, one)
 import ZkFold.Cardano.Rollup.Aggregator.Api (AggregatorAPI)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (enqueueTx)
@@ -37,17 +51,32 @@ import ZkFold.Cardano.Rollup.Aggregator.Ctx (
   Ctx (..),
   runSkeletonI,
  )
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), loadState)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (
+  PersistedState (..),
+  getBatchByIdDb,
+  getBatchesDb,
+  getPendingBridgeOutsDb,
+  getPendingTxsDb,
+  getTxByHashDb,
+  getTxsByAddressDb,
+  loadState,
+ )
 import ZkFold.Cardano.Rollup.Aggregator.Types (
+  BatchDetailResponse (..),
+  BatchesResponse (..),
   BridgeInRequest (..),
   BridgeInResponse (..),
+  BridgeOutsResponse (..),
   I,
+  PendingTxsResponse (..),
   QueryL2UtxosResponse (..),
   QueuedTx (..),
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
   SubmitTxRequest (..),
   SubmitTxResponse (..),
+  TxResponse (..),
+  TxsByAddressResponse (..),
  )
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Data.Vector (fromVector)
@@ -65,6 +94,12 @@ aggregatorServer ctx =
     :<|> handleBridgeIn ctx
     :<|> handleSubmitL1Tx ctx
     :<|> handleQueryL2Utxos ctx
+    :<|> handleGetTx ctx
+    :<|> handlePendingTxs ctx
+    :<|> handleTxsByAddress ctx
+    :<|> handleGetBatch ctx
+    :<|> handleBatches ctx
+    :<|> handleBridgeOuts ctx
 
 -- | Handle health check requests.
 handleHealth ∷ Ctx → IO ()
@@ -85,8 +120,8 @@ handleSubmitTx ctx SubmitTxRequest {..} = do
             then throwIO $ err400 {errBody = "bridge-out value mismatch"}
             else do
               let bridgeOutPairs = map (second addressFromBech32) strBridgeOuts
-              enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs
-              pure $ SubmitTxResponse "queued"
+              txHash ← enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs
+              pure $ SubmitTxResponse "queued" txHash
  where
   validateAddr (out :*: _, (_, addrBech32)) =
     let addr = addressFromBech32 addrBech32
@@ -139,3 +174,53 @@ handleQueryL2Utxos ctx l2Addr = do
   case mState of
     Nothing → pure $ QueryL2UtxosResponse []
     Just ps → pure $ QueryL2UtxosResponse (utxosAtL2Address l2Addr (psUtxoPreimage ps))
+
+-- | Handle single transaction lookup by hash.
+handleGetTx ∷ Ctx → Text → IO TxResponse
+handleGetTx ctx txHash = do
+  mTx ← getTxByHashDb (ctxDbPath ctx) txHash
+  case mTx of
+    Nothing → throwIO err404
+    Just tr → pure (TxResponse tr)
+
+-- | Handle pending transactions query.
+handlePendingTxs ∷ Ctx → IO PendingTxsResponse
+handlePendingTxs ctx = do
+  txs ← getPendingTxsDb (ctxDbPath ctx)
+  pure (PendingTxsResponse txs)
+
+-- | Handle transaction history query for an L2 address.
+handleTxsByAddress
+  ∷ Ctx
+  → FieldElement RollupBFInterpreter
+  → Maybe Natural
+  → Maybe Natural
+  → IO TxsByAddressResponse
+handleTxsByAddress ctx l2Addr mLimit mOffset = do
+  let addrText = decodeUtf8 . toStrict . encode $ l2Addr
+      lim = fromMaybe 20 mLimit
+      off = fromMaybe 0 mOffset
+  txs ← getTxsByAddressDb (ctxDbPath ctx) addrText lim off
+  pure (TxsByAddressResponse (length txs) txs)
+
+-- | Handle single batch lookup by DB id.
+handleGetBatch ∷ Ctx → Int64 → IO BatchDetailResponse
+handleGetBatch ctx batchId = do
+  mBatch ← getBatchByIdDb (ctxDbPath ctx) batchId
+  case mBatch of
+    Nothing → throwIO err404
+    Just (br, txs) → pure (BatchDetailResponse br txs)
+
+-- | Handle paginated batch list query.
+handleBatches ∷ Ctx → Maybe Natural → Maybe Natural → IO BatchesResponse
+handleBatches ctx mLimit mOffset = do
+  let lim = fromMaybe 20 mLimit
+      off = fromMaybe 0 mOffset
+  batches ← getBatchesDb (ctxDbPath ctx) lim off
+  pure (BatchesResponse batches)
+
+-- | Handle bridge-outs query for an L1 address.
+handleBridgeOuts ∷ Ctx → GYAddressBech32 → IO BridgeOutsResponse
+handleBridgeOuts ctx l1Addr = do
+  entries ← getPendingBridgeOutsDb (ctxDbPath ctx) (addressFromBech32 l1Addr)
+  pure (BridgeOutsResponse entries)
