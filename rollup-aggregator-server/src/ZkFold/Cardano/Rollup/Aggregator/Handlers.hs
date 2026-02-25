@@ -23,7 +23,6 @@ import Control.Exception (throwIO)
 import Data.Aeson (encode)
 import Data.Bifunctor (Bifunctor (..))
 import Data.ByteString.Lazy (toStrict)
-import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
@@ -204,9 +203,9 @@ handleTxsByAddress ctx l2Addr mLimit mOffset = do
   pure (TxsByAddressResponse (length txs) txs)
 
 -- | Handle single batch lookup by DB id.
-handleGetBatch ∷ Ctx → Int64 → IO BatchDetailResponse
+handleGetBatch ∷ Ctx → Natural → IO BatchDetailResponse
 handleGetBatch ctx batchId = do
-  mBatch ← getBatchByIdDb (ctxDbPath ctx) batchId
+  mBatch ← getBatchByIdDb (ctxDbPath ctx) (fromIntegral batchId)
   case mBatch of
     Nothing → throwIO err404
     Just (br, txs) → pure (BatchDetailResponse br txs)

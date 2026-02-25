@@ -12,7 +12,6 @@ module ZkFold.Cardano.Rollup.Aggregator.Api (
 
 import Control.Lens ((.~), (?~))
 import Data.Function ((&))
-import Data.Int (Int64)
 import Data.OpenApi
 import Data.OpenApi qualified as OpenApi
 import Data.Text (Text)
@@ -137,7 +136,7 @@ type GetBatchAPI =
         \including the L1 transaction hash and the full list of L2 transactions \
         \bundled in that batch."
     :> "batch"
-    :> Capture "id" Int64
+    :> Capture "id" Natural
     :> Get '[JSON] BatchDetailResponse
 
 -- | Get paginated batch list.
