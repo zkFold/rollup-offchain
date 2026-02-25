@@ -17,6 +17,7 @@ import Control.Concurrent.STM (
  )
 import Control.Exception (Exception, Handler (Handler), catches, displayException)
 import Control.Monad (forM, forever)
+import Data.List (nub)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.Aeson (encode)
 import Data.ByteString (ByteString)
@@ -130,13 +131,24 @@ initialState =
     }
 
 -- | Enqueue a transaction by writing it to the SQLite database.
--- L2 addresses are extracted from the transaction outputs and stored separately
--- for indexed lookup. Returns the transaction hash (JSON-encoded txId field element).
+-- Both output addresses (receiving) and input addresses (spending, resolved from
+-- the persisted UTxO preimage) are stored in 'tx_addresses' for indexed lookup.
+-- Returns the transaction hash (JSON-encoded txId field element).
 enqueueTx ∷ Ctx → QueuedTx → IO Text
 enqueueTx ctx queued = do
-  let outs = fromVector (unComp1 (outputs (qtTransaction queued)))
-      addrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
-  enqueueTxDb (ctxDbPath ctx) queued addrs
+  let tx = qtTransaction queued
+      outs = fromVector (unComp1 (outputs tx))
+      outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
+      inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
+  mState ← loadState (ctxDbPath ctx)
+  let inAddrs = case mState of
+        Nothing → []
+        Just ps →
+          let utxoList = filter (/= nullUTxO) $ fromVector (psUtxoPreimage ps)
+           in [ decodeUtf8 . toStrict . encode $ oAddress (uOutput u)
+              | ref ← inRefs, u ← utxoList, uRef u == ref
+              ]
+  enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
 
 -- | Query the rollup address for 'BridgeInInitial' UTxOs, returning L2 address and value.
 queryBridgeIns ∷ Ctx → IO [(Integer, GYValue)]
