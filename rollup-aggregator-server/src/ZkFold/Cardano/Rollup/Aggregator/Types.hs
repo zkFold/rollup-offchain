@@ -99,7 +99,7 @@ data SubmitTxRequest = SubmitTxRequest
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitTxReqPrefix, LowerFirst]] SubmitTxRequest
+    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitTxReqPrefix, CamelToSnake]] SubmitTxRequest
 
 instance ToSchema SubmitTxRequest where
   declareNamedSchema proxy = do
@@ -123,7 +123,7 @@ data SubmitTxResponse = SubmitTxResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitTxResPrefix, LowerFirst]] SubmitTxResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitTxResPrefix, CamelToSnake]] SubmitTxResponse
 
 instance ToSchema SubmitTxResponse where
   declareNamedSchema proxy = do
@@ -149,7 +149,7 @@ data BridgeInRequest = BridgeInRequest
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeInReqPrefix, LowerFirst]] BridgeInRequest
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeInReqPrefix, CamelToSnake]] BridgeInRequest
 
 instance ToSchema BridgeInRequest where
   declareNamedSchema proxy = do
@@ -172,7 +172,7 @@ newtype BridgeInResponse = BridgeInResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeInResPrefix, LowerFirst]] BridgeInResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeInResPrefix, CamelToSnake]] BridgeInResponse
 
 instance ToSchema BridgeInResponse where
   declareNamedSchema proxy = do
@@ -196,7 +196,7 @@ data SubmitL1TxRequest = SubmitL1TxRequest
   deriving stock Generic
   deriving
     FromJSON
-    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitL1TxReqPrefix, LowerFirst]] SubmitL1TxRequest
+    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitL1TxReqPrefix, CamelToSnake]] SubmitL1TxRequest
 
 instance ToSchema SubmitL1TxRequest where
   declareNamedSchema proxy = do
@@ -219,7 +219,7 @@ newtype SubmitL1TxResponse = SubmitL1TxResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitL1TxResPrefix, LowerFirst]] SubmitL1TxResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitL1TxResPrefix, CamelToSnake]] SubmitL1TxResponse
 
 instance ToSchema SubmitL1TxResponse where
   declareNamedSchema proxy = do
@@ -242,7 +242,7 @@ newtype QueryL2UtxosResponse = QueryL2UtxosResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix QueryL2UtxosResPrefix, LowerFirst]] QueryL2UtxosResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix QueryL2UtxosResPrefix, CamelToSnake]] QueryL2UtxosResponse
 
 instance ToSchema QueryL2UtxosResponse where
   declareNamedSchema proxy = do
@@ -292,7 +292,7 @@ data TxRecord = TxRecord
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix TxRecordPrefix, LowerFirst]] TxRecord
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxRecordPrefix, CamelToSnake]] TxRecord
 
 instance ToSchema TxRecord where
   declareNamedSchema proxy = do
@@ -318,7 +318,7 @@ data BatchRecord = BatchRecord
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchRecordPrefix, LowerFirst]] BatchRecord
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchRecordPrefix, CamelToSnake]] BatchRecord
 
 instance ToSchema BatchRecord where
   declareNamedSchema proxy = do
@@ -341,7 +341,7 @@ newtype PendingTxsResponse = PendingTxsResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix PendingTxsResPrefix, LowerFirst]] PendingTxsResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix PendingTxsResPrefix, CamelToSnake]] PendingTxsResponse
 
 instance ToSchema PendingTxsResponse where
   declareNamedSchema proxy = do
@@ -364,7 +364,7 @@ newtype TxResponse = TxResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix TxResPrefix, LowerFirst]] TxResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxResPrefix, CamelToSnake]] TxResponse
 
 instance ToSchema TxResponse where
   declareNamedSchema proxy = do
@@ -388,7 +388,7 @@ data TxsByAddressResponse = TxsByAddressResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix TxsByAddressResPrefix, LowerFirst]] TxsByAddressResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxsByAddressResPrefix, CamelToSnake]] TxsByAddressResponse
 
 instance ToSchema TxsByAddressResponse where
   declareNamedSchema proxy = do
@@ -411,7 +411,7 @@ newtype BatchesResponse = BatchesResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchesResPrefix, LowerFirst]] BatchesResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchesResPrefix, CamelToSnake]] BatchesResponse
 
 instance ToSchema BatchesResponse where
   declareNamedSchema proxy = do
@@ -435,7 +435,7 @@ data BatchDetailResponse = BatchDetailResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchDetailResPrefix, LowerFirst]] BatchDetailResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BatchDetailResPrefix, CamelToSnake]] BatchDetailResponse
 
 instance ToSchema BatchDetailResponse where
   declareNamedSchema proxy = do
@@ -460,7 +460,7 @@ data BridgeOutEntry = BridgeOutEntry
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeOutEntryPrefix, LowerFirst]] BridgeOutEntry
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeOutEntryPrefix, CamelToSnake]] BridgeOutEntry
 
 instance ToSchema BridgeOutEntry where
   declareNamedSchema proxy = do
@@ -483,7 +483,7 @@ newtype BridgeOutsResponse = BridgeOutsResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeOutsResPrefix, LowerFirst]] BridgeOutsResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeOutsResPrefix, CamelToSnake]] BridgeOutsResponse
 
 instance ToSchema BridgeOutsResponse where
   declareNamedSchema proxy = do
