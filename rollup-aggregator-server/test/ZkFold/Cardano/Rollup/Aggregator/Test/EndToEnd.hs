@@ -223,8 +223,11 @@ endToEndTests setup =
             assertEqual "tx1 status is batched" TxBatched (trStatus tx1RecBatched)
             TxResponse {txrRecord = tx2RecBatched} ← handleGetTx aggCtx txHash2
             assertEqual "tx2 status is batched" TxBatched (trStatus tx2RecBatched)
-            TxsByAddressResponse {tarTotal = addrTotal1} ← handleTxsByAddress aggCtx Ex3.address Nothing Nothing
-            assertBool "Ex3.address has tx history after batch 1" (addrTotal1 > 0)
+            -- tx1 and tx2 each have address as an output address, so both appear in history (newest first)
+            TxsByAddressResponse {tarTotal = addrTotal1, tarTxs = addrTxs1} ← handleTxsByAddress aggCtx Ex3.address Nothing Nothing
+            assertEqual "Ex3.address has 2 txs after batch 1" 2 addrTotal1
+            assertEqual "tx history hashes for Ex3.address (newest first)" [txHash2, txHash1] (map trHash addrTxs1)
+            assertBool "all txs in address history are batched" (all ((== TxBatched) . trStatus) addrTxs1)
 
             -- Step 6b: Query L2 UTxOs after batch 1
             -- After tx1+tx2: address has 5 ADA + 25 asset2, address2 has 5 ADA + 25 asset2
@@ -262,7 +265,7 @@ endToEndTests setup =
                     , strSignatures = perTxSigs2 !! 1
                     , strBridgeOuts = []
                     }
-            SubmitTxResponse {strStatus = status4} ← handleSubmitTx aggCtx strReq4
+            SubmitTxResponse {strStatus = status4, strTxHash = txHash4} ← handleSubmitTx aggCtx strReq4
             assertEqual "L2 tx4 queued" "queued" status4
             info "L2 tx4 queued"
 
@@ -289,8 +292,12 @@ endToEndTests setup =
             BridgeOutsResponse {borEntries = boutsAfterB2} ← handleBridgeOuts aggCtx bridgeOutAddr
             assertEqual "bridge-out still present after batch 2" 1 (length boutsAfterB2)
             assertEqual "bridge-out status is batched" TxBatched (boeStatus (head boutsAfterB2))
-            TxsByAddressResponse {tarTotal = addrTotal2} ← handleTxsByAddress aggCtx Ex3.address Nothing Nothing
-            assertBool "Ex3.address has tx history after batch 2" (addrTotal2 > 0)
+            -- tx3 additionally has address as an output AND address as an input (resolved from post-batch-1
+            -- preimage since tx2's outputs are there), and tx4 has address as an output — so all 4 txs appear
+            TxsByAddressResponse {tarTotal = addrTotal2, tarTxs = addrTxs2} ← handleTxsByAddress aggCtx Ex3.address Nothing Nothing
+            assertEqual "Ex3.address has 4 txs after batch 2" 4 addrTotal2
+            assertEqual "tx history hashes for Ex3.address (newest first)" [txHash4, txHash3, txHash2, txHash1] (map trHash addrTxs2)
+            assertBool "all txs in address history are batched" (all ((== TxBatched) . trStatus) addrTxs2)
 
             -- Step 8b: Query L2 UTxOs after batch 2
             let [out1 :*: _, out2 :*: _] = Ex3.tx4 & outputs & unComp1 & fromVector
