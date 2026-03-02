@@ -18,6 +18,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Version (showVersion)
 import GHC.Natural (Natural)
+import GeniusYield.Types (GYAddressBech32)
 import PackageInfo_rollup_aggregator_server qualified as PackageInfo
 import Servant
 import Servant.OpenApi
@@ -38,7 +39,6 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   TxResponse,
   TxsByAddressResponse,
  )
-import GeniusYield.Types (GYAddressBech32)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 
@@ -119,8 +119,9 @@ type PendingTxsAPI =
 type TxsByAddressAPI =
   Summary "Transaction history for L2 address"
     :> Description
-        "Return a paginated list of all transactions that have an output destined for \
-        \the given L2 address, ordered newest first. \
+        "Return a paginated list of all transactions that involve the given L2 address, \
+        \either as a recipient of an output or as a sender (i.e. one of the transaction's \
+        \inputs was previously locked at that address), ordered newest first. \
         \Defaults: limit = 20, offset = 0."
     :> "txs"
     :> QueryParam' '[Required, Strict] "l2address" (FieldElement RollupBFInterpreter)
@@ -154,6 +155,7 @@ type BatchesAPI =
 -- | Get bridge-outs (pending + batched) for an L1 address.
 type BridgeOutsAPI =
   Summary "List bridge-outs for L1 address"
+    -- TODO: Need to improve description.
     :> Description
         "Return all bridge-out entries destined for the given L1 bech32 address. \
         \A bridge-out with status 'pending' or 'processing' is waiting to be included in a batch. \
