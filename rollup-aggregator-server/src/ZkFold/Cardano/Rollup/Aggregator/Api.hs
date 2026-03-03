@@ -40,6 +40,9 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   SubmitTxResponse,
   TxResponse,
   TxsByAddressResponse,
+  TxHashRequest,
+  TxHashResponse,
+  TxParametersResponse,
  )
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
@@ -74,6 +77,10 @@ type BridgeInAPI =
     :> "in"
     :> ReqBody '[JSON] BridgeInRequest
     :> Post '[JSON] BridgeInResponse
+
+type TxHashAPI = "tx" :> "hash" :> ReqBody '[JSON] TxHashRequest :> Post '[JSON] TxHashResponse
+
+type TxParametersAPI = "tx" :> "parameters" :> Get '[JSON] TxParametersResponse
 
 type SubmitL1TxAPI =
   Summary "Submit signed L1 transaction"
@@ -182,6 +189,8 @@ type BridgeOutsAPI =
 type V0API =
   HealthAPI
     :<|> SubmitTxAPI
+    :<|> TxHashAPI
+    :<|> TxParametersAPI
     :<|> BridgeInAPI
     :<|> SubmitL1TxAPI
     :<|> StateInfoAPI
@@ -242,6 +251,12 @@ aggregatorAPIOpenApi =
     & OpenApi.applyTagsFor
       (subOperations (Proxy ∷ Proxy (V0 :> SubmitTxAPI)) (Proxy ∷ Proxy AggregatorAPI))
       ["Transactions" & OpenApi.description ?~ "Submit a single L2 transaction for batching."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> TxHashAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["Transactions" & OpenApi.description ?~ "Calculate hash of an L2 transaction."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> TxParametersAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["Transactions" & OpenApi.description ?~ "Obtain current transaction parameters."]
     & OpenApi.applyTagsFor
       (subOperations (Proxy ∷ Proxy (V0 :> BridgeInAPI)) (Proxy ∷ Proxy AggregatorAPI))
       ["Bridge" & OpenApi.description ?~ "Bridge operations."]

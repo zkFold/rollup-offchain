@@ -5,6 +5,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
   -- * Individual Handlers
   handleHealth,
   handleSubmitTx,
+  handleTxHash,
   handleBridgeIn,
   handleSubmitL1Tx,
   handleStateInfo,
@@ -63,12 +64,34 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   loadState,
   lookupPreimagesDb,
  )
-import ZkFold.Cardano.Rollup.Aggregator.Types (A, BatchDetailResponse (..), BatchesResponse (..), BridgeInRequest (..), BridgeInResponse (..), BridgeOutsResponse (..), I, PendingTxsResponse (..), QueryL2UtxosResponse (..), QueuedTx (..), StateInfoResponse (..), SubmitL1TxRequest (..), SubmitL1TxResponse (..), SubmitTxRequest (..), SubmitTxResponse (..), TxResponse (..), TxsByAddressResponse (..))
+import ZkFold.Cardano.Rollup.Aggregator.Types (
+  BatchDetailResponse (..),
+  BatchesResponse (..),
+  BridgeInRequest (..),
+  BridgeInResponse (..),
+  BridgeOutsResponse (..),
+  I,
+  PendingTxsResponse (..),
+  QueryL2UtxosResponse (..),
+  QueuedTx (..),
+  StateInfoResponse (..),
+  SubmitL1TxRequest (..),
+  SubmitL1TxResponse (..),
+  SubmitTxRequest (..),
+  SubmitTxResponse (..),
+  TxResponse (..),
+  TxsByAddressResponse (..),
+  TxHashRequest (..),
+  TxHashResponse (..),
+  TxParametersResponse (..),
+  txParameters,
+ )
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.Bool (fromBool)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types (nullUTxOHash)
+import ZkFold.Symbolic.Data.Hash (Hashable (..))
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..), UTxO (..))
 import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
@@ -78,6 +101,8 @@ aggregatorServer ∷ Ctx → ServerT AggregatorAPI IO
 aggregatorServer ctx =
   handleHealth ctx
     :<|> handleSubmitTx ctx
+    :<|> handleTxHash ctx
+    :<|> handleTxParameters ctx
     :<|> handleBridgeIn ctx
     :<|> handleSubmitL1Tx ctx
     :<|> handleStateInfo ctx
@@ -117,6 +142,14 @@ handleSubmitTx ctx SubmitTxRequest {..} = do
      in expectedAddrFe == oAddress out
 
   validateValue (out :*: _, (val, _)) = matchesBridgeOutValue out val
+
+handleTxHash ∷ Ctx → TxHashRequest → IO TxHashResponse
+handleTxHash _ctx TxHashRequest {..} = pure $ TxHashResponse {..}
+  where
+    thrHash = hasher thrTransaction
+
+handleTxParameters ∷ Ctx → IO TxParametersResponse
+handleTxParameters _ctx = pure txParameters 
 
 -- | Check if a 'GYValue' matches the symbolic assets of an 'Output'.
 matchesBridgeOutValue ∷ KnownNat a ⇒ Output a I → GYValue → Bool

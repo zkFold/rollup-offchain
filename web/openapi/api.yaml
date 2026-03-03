@@ -289,6 +289,42 @@ components:
       - inputs
       - outputs
       type: object
+    TxHashRequest:
+      description: Calculate the hash of an L2 transaction
+      properties:
+        transaction:
+          $ref: '#/components/schemas/Transaction_2_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+      required:
+      - transaction
+      type: object
+    TxHashResponse:
+      description: The hash of on L2 transaction
+      properties:
+        hash:
+          type: integer
+      required:
+      - hash
+      type: object
+    TxParametersResponse:
+      description: The hash of on L2 transaction
+      properties:
+        assets:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+        inputs:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+        outputs:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+      required:
+      - inputs
+      - outputs
+      - assets
+      type: object
     TxRecord:
       description: A transaction record with status information
       properties:
@@ -553,6 +589,35 @@ paths:
       summary: Submit L2 transaction
       tags:
       - Transactions
+  /v0/tx/hash:
+    post:
+      requestBody:
+        content:
+          application/json;charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/TxHashRequest'
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TxHashResponse'
+          description: ''
+        '400':
+          description: Invalid `body`
+      tags:
+      - Transactions
+  /v0/tx/parameters:
+    get:
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TxParametersResponse'
+          description: ''
+      tags:
+      - Transactions
   /v0/tx/{hash}:
     get:
       description: Retrieve a single queued transaction by its hash (the JSON-encoded
@@ -654,6 +719,10 @@ tags:
 - description: Endpoint to check if the server is healthy.
   name: Settings
 - description: Submit a single L2 transaction for batching.
+  name: Transactions
+- description: Calculate hash of an L2 transaction.
+  name: Transactions
+- description: Obtain current transaction parameters.
   name: Transactions
 - description: Bridge operations.
   name: Bridge
