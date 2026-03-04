@@ -17,12 +17,19 @@ import Control.Concurrent.STM (
  )
 import Control.Exception (Exception, Handler (Handler), catches, displayException)
 import Control.Monad (forM, forever)
+import Data.List (nub)
 import Control.Monad.Reader (asks, runReaderT)
+import Data.Aeson (encode)
 import Data.ByteString (ByteString)
+import Data.ByteString.Lazy (toStrict)
 import Data.Foldable (for_)
 import Data.Function ((&))
+import Data.Int (Int64)
 import Data.Maybe (catMaybes)
 import Data.Proxy (Proxy (..))
+import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Text.Encoding (decodeUtf8)
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeNats (natVal, type (+))
 import GeniusYield.Providers.Blockfrost (BlockfrostProviderException)
@@ -57,6 +64,8 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   dequeueTxsDb,
   enqueueTxDb,
   loadState,
+  recordBatchDb,
+  revertTxsDb,
   saveState,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types
@@ -66,7 +75,7 @@ import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
 import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
 import ZkFold.Cardano.UPLC.RollupSimple.Types (BridgeUtxoStatus (..))
 import ZkFold.Data.MerkleTree (Leaves)
-import ZkFold.Data.Vector (Vector)
+import ZkFold.Data.Vector (Vector, fromVector)
 import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
 import ZkFold.Symbolic.Data.Hash (hash)
@@ -122,8 +131,24 @@ initialState =
     }
 
 -- | Enqueue a transaction by writing it to the SQLite database.
-enqueueTx ∷ Ctx → QueuedTx → IO ()
-enqueueTx Ctx {..} queued = enqueueTxDb ctxDbPath queued
+-- Both output addresses (receiving) and input addresses (spending, resolved from
+-- the persisted UTxO preimage) are stored in 'tx_addresses' for indexed lookup.
+-- Returns the transaction hash (JSON-encoded txId field element).
+enqueueTx ∷ Ctx → QueuedTx → IO Text
+enqueueTx ctx queued = do
+  let tx = qtTransaction queued
+      outs = fromVector (unComp1 (outputs tx))
+      outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
+      inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
+  mState ← loadState (ctxDbPath ctx)
+  let inAddrs = case mState of
+        Nothing → []
+        Just ps →
+          let utxoList = filter (/= nullUTxO) $ fromVector (psUtxoPreimage ps)
+           in [ decodeUtf8 . toStrict . encode $ oAddress (uOutput u)
+              | ref ← inRefs, u ← utxoList, uRef u == ref
+              ]
+  enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
 
 -- | Query the rollup address for 'BridgeInInitial' UTxOs, returning L2 address and value.
 queryBridgeIns ∷ Ctx → IO [(Integer, GYValue)]
@@ -182,30 +207,33 @@ startBatcher ctx@Ctx {..} bs = forever $ do
   let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
   threadDelay delayMicros
   mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
-  for_ mQueued (processBatchWithLogging ctx bs)
+  for_ mQueued $ \pairs →
+    let (ids, qtxs) = unzip pairs
+     in processBatchWithLogging ctx bs ids qtxs
 
-processBatchWithLogging ∷ Ctx → BatcherState → [QueuedTx] → IO ()
-processBatchWithLogging ctx@Ctx {..} bs queued =
+processBatchWithLogging ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO ()
+processBatchWithLogging ctx@Ctx {..} bs ids queued =
   ( do
-      tid ← processBatch ctx bs queued
+      tid ← processBatch ctx bs ids queued
       gyLogInfo ctxProviders mempty $ "Batch submitted: " <> show tid
   )
-    `catches` [ Handler (\(err ∷ GYTxMonadException) → logException "GYTxMonadException" err)
-              , Handler (\(err ∷ SubmitTxException) → logException "SubmitTxException" err)
-              , Handler (\(err ∷ GYAwaitTxException) → logException "GYAwaitTxException" err)
-              , Handler (\(err ∷ BlockfrostProviderException) → logException "BlockfrostProviderException" err)
-              , Handler (\(err ∷ MaestroProviderException) → logException "MaestroProviderException" err)
-              , Handler (\(err ∷ KupoProviderException) → logException "KupoProviderException" err)
-              , Handler (\(err ∷ OgmiosProviderException) → logException "OgmiosProviderException" err)
+    `catches` [ Handler (\(err ∷ GYTxMonadException) → revert >> logException "GYTxMonadException" err)
+              , Handler (\(err ∷ SubmitTxException) → revert >> logException "SubmitTxException" err)
+              , Handler (\(err ∷ GYAwaitTxException) → revert >> logException "GYAwaitTxException" err)
+              , Handler (\(err ∷ BlockfrostProviderException) → revert >> logException "BlockfrostProviderException" err)
+              , Handler (\(err ∷ MaestroProviderException) → revert >> logException "MaestroProviderException" err)
+              , Handler (\(err ∷ KupoProviderException) → revert >> logException "KupoProviderException" err)
+              , Handler (\(err ∷ OgmiosProviderException) → revert >> logException "OgmiosProviderException" err)
               ]
  where
+  revert = revertTxsDb ctxDbPath ids
   logException ∷ Exception e ⇒ String → e → IO ()
   logException label err =
     gyLogError ctxProviders mempty $
       "Batch processing failed (" <> label <> "): " <> displayException err
 
-processBatch ∷ Ctx → BatcherState → [QueuedTx] → IO GYTxId
-processBatch ctx@Ctx {..} BatcherState {..} queuedTxs = do
+processBatch ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
+processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
   (prevState, prevUtxoPreimage) ←
     atomically $
       (,) <$> readTVar bsLedgerStateVar <*> readTVar bsUtxoPreimageVar
@@ -252,4 +280,5 @@ processBatch ctx@Ctx {..} BatcherState {..} queuedTxs = do
     writeTVar bsLedgerStateVar newState
     writeTVar bsUtxoPreimageVar newPreimage
   saveState ctxDbPath newState newPreimage
+  recordBatchDb ctxDbPath ids (Text.pack (show submittedTxId))
   pure submittedTxId
