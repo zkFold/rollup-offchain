@@ -5,6 +5,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Batcher (
   enqueueTx,
   processBatch,
   initialState,
+  queryBridgeIns,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -61,6 +62,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   PersistedState (..),
+  dequeueAvailableTxsDb,
   dequeueTxsDb,
   enqueueTxDb,
   loadState,
@@ -78,6 +80,8 @@ import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Data.Vector (Vector, fromVector)
 import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
+import ZkFold.Symbolic.Data.Bool (BoolType (false))
+import ZkFold.Symbolic.Data.Bool qualified as ZkBool
 import ZkFold.Symbolic.Data.Hash (hash)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
@@ -200,16 +204,45 @@ toSymbolicOutput addr val =
       , assetQuantity = fromConstant amt
       }
 
+-- | A null transaction: all inputs are 'nullOutputRef', all outputs are 'nullOutput'.
+-- The circuit skips signature verification and Merkle tree operations for null
+-- inputs/outputs, so this can safely pad a batch when fewer real transactions
+-- are available than the circuit's fixed 'TxCount'.
+nullQueuedTx ∷ QueuedTx
+nullQueuedTx =
+  QueuedTx
+    { qtTransaction =
+        Transaction
+          { inputs = Comp1 (pure nullOutputRef)
+          , outputs = Comp1 (pure (nullOutput @A @I :*: (false ∷ ZkBool.Bool I)))
+          }
+    , qtSignatures = Comp1 (pure (zero :*: zero :*: zero))
+    , qtBridgeOuts = []
+    }
+
 -- | Run the batcher loop (blocking). Polls the database at the configured interval
--- and processes a batch whenever enough transactions are queued.
+-- and processes a batch when either:
+-- * enough real transactions are queued (≥ bcBatchTransactions), or
+-- * there are pending bridge-ins on L1 (remaining slots are padded with null txs).
 startBatcher ∷ Ctx → BatcherState → IO ()
 startBatcher ctx@Ctx {..} bs = forever $ do
   let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
   threadDelay delayMicros
-  mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
-  for_ mQueued $ \pairs →
-    let (ids, qtxs) = unzip pairs
-     in processBatchWithLogging ctx bs ids qtxs
+  bridgeInData ← queryBridgeIns ctx
+  if not (null bridgeInData)
+    then do
+      -- Bridge-ins pending: trigger a batch even with fewer than TxCount real txs,
+      -- padding the remainder with null transactions.
+      let txCount = fromIntegral (natVal (Proxy @TxCount))
+      available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
+      let (ids, qtxs) = unzip available
+          padded = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
+      processBatchWithLogging ctx bs ids padded
+    else do
+      mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
+      for_ mQueued $ \pairs →
+        let (ids, qtxs) = unzip pairs
+         in processBatchWithLogging ctx bs ids qtxs
 
 processBatchWithLogging ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO ()
 processBatchWithLogging ctx@Ctx {..} bs ids queued =
@@ -272,7 +305,11 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
       (snd ctxSigningKey)
       collateral
       $ do
-        let bridgeInsForL1 = map (\(addr, val) → (val, fromConstant addr)) bridgeInData
+        -- Only pass as many bridge-ins as the circuit handles (Bi items), matching
+        -- the prefix taken by toBridgedIn. Passing more would cause the L1 validator
+        -- to see BridgeIn outputs not covered by the ZK proof.
+        let biCount = fromIntegral (natVal (Proxy @Bi))
+            bridgeInsForL1 = take biCount $ map (\(addr, val) → (val, fromConstant addr)) bridgeInData
         skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus) ctxRollupBuildInfo
         body ← buildTxBody skel
         signAndSubmitConfirmed body

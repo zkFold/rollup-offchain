@@ -33,6 +33,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeOutsResponse,
   PendingTxsResponse,
   QueryL2UtxosResponse,
+  StateInfoResponse,
   SubmitL1TxRequest,
   SubmitL1TxResponse,
   SubmitTxRequest,
@@ -84,6 +85,15 @@ type SubmitL1TxAPI =
     :> "submit"
     :> ReqBody '[JSON] SubmitL1TxRequest
     :> Post '[JSON] SubmitL1TxResponse
+
+-- | Query current rollup state info.
+type StateInfoAPI =
+  Summary "Get rollup state info"
+    :> Description
+        "Return the current persisted rollup state (chain length, UTxO tree root, etc.), \
+        \or null if the rollup has not been seeded yet."
+    :> "state"
+    :> Get '[JSON] StateInfoResponse
 
 -- | Query UTxOs at a given L2 address.
 type QueryL2UtxosAPI =
@@ -174,6 +184,7 @@ type V0API =
     :<|> SubmitTxAPI
     :<|> BridgeInAPI
     :<|> SubmitL1TxAPI
+    :<|> StateInfoAPI
     :<|> QueryL2UtxosAPI
     :<|> GetTxAPI
     :<|> PendingTxsAPI
@@ -237,6 +248,9 @@ aggregatorAPIOpenApi =
     & OpenApi.applyTagsFor
       (subOperations (Proxy ∷ Proxy (V0 :> SubmitL1TxAPI)) (Proxy ∷ Proxy AggregatorAPI))
       ["L1 transactions" & OpenApi.description ?~ "Submit L1 transactions."]
+    & OpenApi.applyTagsFor
+      (subOperations (Proxy ∷ Proxy (V0 :> StateInfoAPI)) (Proxy ∷ Proxy AggregatorAPI))
+      ["L2 utxo queries" & OpenApi.description ?~ "Query L2 UTxO state."]
     & OpenApi.applyTagsFor
       (subOperations (Proxy ∷ Proxy (V0 :> QueryL2UtxosAPI)) (Proxy ∷ Proxy AggregatorAPI))
       ["L2 utxo queries" & OpenApi.description ?~ "Query L2 UTxO state."]

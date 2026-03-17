@@ -7,6 +7,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
   handleSubmitTx,
   handleBridgeIn,
   handleSubmitL1Tx,
+  handleStateInfo,
   handleQueryL2Utxos,
   handleGetTx,
   handlePendingTxs,
@@ -66,10 +67,10 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
   BridgeOutsResponse (..),
-  I,
   PendingTxsResponse (..),
   QueryL2UtxosResponse (..),
   QueuedTx (..),
+  StateInfoResponse (..),
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
   SubmitTxRequest (..),
@@ -92,6 +93,7 @@ aggregatorServer ctx =
     :<|> handleSubmitTx ctx
     :<|> handleBridgeIn ctx
     :<|> handleSubmitL1Tx ctx
+    :<|> handleStateInfo ctx
     :<|> handleQueryL2Utxos ctx
     :<|> handleGetTx ctx
     :<|> handlePendingTxs ctx
@@ -165,6 +167,12 @@ handleSubmitL1Tx ctx SubmitL1TxRequest {..} = do
   let txWithWitness = appendWitnessGYTx sl1trWitness sl1trTransaction
   txId ← gySubmitTx (ctxProviders ctx) txWithWitness
   pure $ SubmitL1TxResponse txId
+
+-- | Handle rollup state info query.
+handleStateInfo ∷ Ctx → IO StateInfoResponse
+handleStateInfo ctx = do
+  mState ← loadState (ctxDbPath ctx)
+  pure $ StateInfoResponse (fmap psLedgerState mState)
 
 -- | Handle L2 UTxO query by address.
 handleQueryL2Utxos ∷ Ctx → FieldElement RollupBFInterpreter → IO QueryL2UtxosResponse
