@@ -6,8 +6,6 @@ module ZkFold.Cardano.Rollup.Aggregator.Batcher (
   processBatch,
   initialState,
   queryBridgeIns,
-  toSymbolicOutput,
-  bridgeInTxId,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -34,7 +32,6 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8)
 import GHC.Generics ((:*:) (..), (:.:) (..))
-import GHC.Natural (Natural)
 import GHC.TypeNats (natVal, type (+))
 import GeniusYield.Providers.Blockfrost (BlockfrostProviderException)
 import GeniusYield.Providers.Common (SubmitTxException)
@@ -59,7 +56,7 @@ import GeniusYield.Types (
   valueToPlutus,
  )
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenValue)
-import ZkFold.Algebra.Class (FromConstant (..), ToConstant (..), zero)
+import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
@@ -83,10 +80,9 @@ import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Data.Vector (Vector, fromVector)
 import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
-import ZkFold.Symbolic.Data.Bool (Bool, BoolType (false))
-import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Data.Bool (BoolType (false))
+import ZkFold.Symbolic.Data.Bool qualified as ZkBool
 import ZkFold.Symbolic.Data.Hash (hash)
-import ZkFold.Symbolic.Data.Hash qualified as Base
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
   LedgerCircuit,
@@ -208,18 +204,6 @@ toSymbolicOutput addr val =
       , assetQuantity = fromConstant amt
       }
 
--- | Compute the @orTxId@ for a bridge-in UTxO at the given queue position.
--- Mirrors the computation in 'updateLedgerState' / 'validateStateUpdate':
--- @bridgeInHash = hash(newState.sLength) = hash(currentLen + pos + 1)@.
--- Queue position 0 means "next to be processed in the upcoming batch".
--- Uses the Natural round-trip (same pattern as 'feToInteger') to avoid
--- requiring the ZkFold algebra '(+)' in scope.
-bridgeInTxId ∷ FieldElement I → Int → HashSimple I
-bridgeInTxId currentLen pos =
-  let n ∷ Natural
-      n = fromIntegral @Natural @Natural (toConstant (toConstant currentLen)) + fromIntegral pos + 1
-   in Base.hHash (hash (fromConstant n ∷ FieldElement I))
-
 -- | A null transaction: all inputs are 'nullOutputRef', all outputs are 'nullOutput'.
 -- The circuit skips signature verification and Merkle tree operations for null
 -- inputs/outputs, so this can safely pad a batch when fewer real transactions
@@ -230,7 +214,7 @@ nullQueuedTx =
     { qtTransaction =
         Transaction
           { inputs = Comp1 (pure nullOutputRef)
-          , outputs = Comp1 (pure (nullOutput @A @I :*: (false ∷ Bool I)))
+          , outputs = Comp1 (pure (nullOutput @A @I :*: (false ∷ ZkBool.Bool I)))
           }
     , qtSignatures = Comp1 (pure (zero :*: zero :*: zero))
     , qtBridgeOuts = []

@@ -7,7 +7,6 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
   handleSubmitTx,
   handleBridgeIn,
   handleSubmitL1Tx,
-  handleStateInfo,
   handleQueryL2Utxos,
   handleGetTx,
   handlePendingTxs,
@@ -44,9 +43,9 @@ import GeniusYield.Types (
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..))
 import PlutusLedgerApi.V1.Value qualified as Plutus
 import Servant (ServerError (..), ServerT, err400, err404, (:<|>) (..))
-import ZkFold.Algebra.Class (fromConstant, one, zero)
+import ZkFold.Algebra.Class (fromConstant, one)
 import ZkFold.Cardano.Rollup.Aggregator.Api (AggregatorAPI)
-import ZkFold.Cardano.Rollup.Aggregator.Batcher (bridgeInTxId, enqueueTx, queryBridgeIns, toSymbolicOutput)
+import ZkFold.Cardano.Rollup.Aggregator.Batcher (enqueueTx)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (
   Ctx (..),
   runSkeletonI,
@@ -62,17 +61,14 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   loadState,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types (
-  A,
   BatchDetailResponse (..),
   BatchesResponse (..),
   BridgeInRequest (..),
   BridgeInResponse (..),
   BridgeOutsResponse (..),
-  I,
   PendingTxsResponse (..),
   QueryL2UtxosResponse (..),
   QueuedTx (..),
-  StateInfoResponse (..),
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
   SubmitTxRequest (..),
@@ -84,7 +80,6 @@ import ZkFold.Cardano.Rollup.Api
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.Bool (fromBool)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Ledger.Types (OutputRef (..), State (..), UTxO (..))
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..))
 import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
@@ -96,7 +91,6 @@ aggregatorServer ctx =
     :<|> handleSubmitTx ctx
     :<|> handleBridgeIn ctx
     :<|> handleSubmitL1Tx ctx
-    :<|> handleStateInfo ctx
     :<|> handleQueryL2Utxos ctx
     :<|> handleGetTx ctx
     :<|> handlePendingTxs ctx
@@ -171,52 +165,13 @@ handleSubmitL1Tx ctx SubmitL1TxRequest {..} = do
   txId ← gySubmitTx (ctxProviders ctx) txWithWitness
   pure $ SubmitL1TxResponse txId
 
--- | Handle rollup state info query.
-handleStateInfo ∷ Ctx → IO StateInfoResponse
-handleStateInfo ctx = do
-  mState ← loadState (ctxDbPath ctx)
-  pure $ StateInfoResponse (fmap psLedgerState mState)
-
 -- | Handle L2 UTxO query by address.
--- Returns confirmed UTxOs from the latest ledger state plus pending bridge-in UTxOs
--- that have been submitted on L1 but not yet settled by a batch. Each pending entry
--- includes the deterministic OutputRef the owner must use when spending it in an L2
--- transaction (orTxId = hash(sLength + queuePosition + 1), orIndex = 0).
 handleQueryL2Utxos ∷ Ctx → FieldElement RollupBFInterpreter → IO QueryL2UtxosResponse
 handleQueryL2Utxos ctx l2Addr = do
   mState ← loadState (ctxDbPath ctx)
-  let confirmedUtxos = case mState of
-        Nothing → []
-        Just ps → utxosAtL2Address l2Addr (psUtxoPreimage ps)
-      currentLen = case mState of
-        Nothing → zero
-        Just ps → sLength (psLedgerState ps)
-  bridgeInData ← queryBridgeIns ctx
-  let pendingBridgeIns =
-        [ pendingBridgeInUtxo pos addr val currentLen
-        | (pos, (addr, val)) ← zip [0 ..] bridgeInData
-        , fromConstant addr == l2Addr
-        ]
-  pure $ QueryL2UtxosResponse confirmedUtxos pendingBridgeIns
-
--- | Compute the deterministic 'UTxO' for a pending bridge-in output.
--- The OutputRef is @{orTxId = hash(currentLen + pos + 1), orIndex = 0}@,
--- mirroring the computation in 'updateLedgerState' / 'validateStateUpdate'.
-pendingBridgeInUtxo
-  ∷ Int
-  -- ^ Queue position (0 = next to be processed).
-  → Integer
-  -- ^ L2 address as Integer (from 'queryBridgeIns').
-  → GYValue
-  -- ^ Value held on L1.
-  → FieldElement RollupBFInterpreter
-  -- ^ Current state chain length.
-  → UTxO A I
-pendingBridgeInUtxo pos l2addr val currentLen =
-  UTxO
-    { uRef = OutputRef {orTxId = bridgeInTxId currentLen pos, orIndex = zero}
-    , uOutput = toSymbolicOutput l2addr val
-    }
+  case mState of
+    Nothing → pure $ QueryL2UtxosResponse []
+    Just ps → pure $ QueryL2UtxosResponse (utxosAtL2Address l2Addr (psUtxoPreimage ps))
 
 -- | Handle single transaction lookup by hash.
 handleGetTx ∷ Ctx → Text → IO TxResponse
