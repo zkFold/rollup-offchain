@@ -3,6 +3,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   initDb,
   enqueueTxDb,
   dequeueTxsDb,
+  dequeueAvailableTxsDb,
   recordBatchDb,
   revertTxsDb,
   getTxByHashDb,
@@ -133,6 +134,28 @@ dequeueTxsDb dbPath n = withConn dbPath $ \conn →
                 "UPDATE txs SET status='processing' WHERE id=?"
                 (Only rowId)
             return (Just (zip (map fst rows) qtxs))
+
+-- | Atomically dequeue up to @n@ pending transactions.
+-- Returns however many are available (possibly fewer than @n@, including zero).
+-- Marks dequeued txs as 'processing'.
+dequeueAvailableTxsDb ∷ FilePath → Natural → IO [(Int64, QueuedTx)]
+dequeueAvailableTxsDb dbPath n = withConn dbPath $ \conn →
+  withExclusiveTransaction conn $ do
+    rows ∷ [(Int64, Text)] ←
+      query
+        conn
+        "SELECT id, payload FROM txs WHERE status='pending' ORDER BY id LIMIT ?"
+        (Only (fromIntegral n ∷ Int))
+    let decoded = sequence [eitherDecodeStrict (encodeUtf8 payload) | (_, payload) ← rows]
+    case decoded of
+      Left _ → return []
+      Right qtxs → do
+        forM_ rows $ \(rowId, _) →
+          execute
+            conn
+            "UPDATE txs SET status='processing' WHERE id=?"
+            (Only rowId)
+        return (zip (map fst rows) qtxs)
 
 -- | Record a successfully submitted batch: insert a 'batches' row and mark
 -- all included txs as 'batched'.

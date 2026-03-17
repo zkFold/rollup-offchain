@@ -27,7 +27,7 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/zkFold/symbolic.git
-  tag: d5e5f9ffb9d415776d45fb0b55b39f77853f26f2
+  tag: 369bba15a8b7a1ae13cd7eb7e92680257fc4ca57
   subdir: 
     symbolic-base
     symbolic-examples

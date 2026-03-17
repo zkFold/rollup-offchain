@@ -20,6 +20,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
   QueryL2UtxosResponse (..),
+  StateInfoResponse (..),
 
   -- * Indexing Types
   TxStatus (..),
@@ -236,8 +237,15 @@ instance ToSchema SubmitL1TxResponse where
 type QueryL2UtxosResPrefix ∷ Symbol
 type QueryL2UtxosResPrefix = "qlur"
 
-newtype QueryL2UtxosResponse = QueryL2UtxosResponse
+data QueryL2UtxosResponse = QueryL2UtxosResponse
   { qlurUtxos ∷ [UTxO A I]
+  , qlurPendingBridgeIns ∷ [UTxO A I]
+  -- ^ Bridge-in UTxOs that have been submitted to L1 but not yet settled by a
+  -- state update batch. The 'OutputRef' in each entry is the deterministic
+  -- reference the owner must use when spending this output in an L2 transaction
+  -- (computed as @hash(sLength + queuePosition + 1)@, index 0). Note this is
+  -- an estimate — it is exact only if no new bridge-ins with an earlier L1
+  -- TxOutRef appear before the next batch runs.
   }
   deriving stock Generic
   deriving
@@ -254,7 +262,33 @@ instance ToSchema QueryL2UtxosResponse where
         proxy
     return $
       schema
-        & OpenApi.schema . OpenApi.description ?~ "Response containing UTxOs at the given L2 address"
+        & OpenApi.schema . OpenApi.description ?~ "Response containing UTxOs at the given L2 address, plus any pending bridge-in outputs not yet settled into the UTxO set"
+
+type StateInfoResPrefix ∷ Symbol
+type StateInfoResPrefix = "sir"
+
+newtype StateInfoResponse = StateInfoResponse
+  { sirState ∷ Maybe (State Bi Bo Ud A I)
+  -- ^ The current persisted rollup state, or null if the rollup has not yet
+  -- been seeded. Clients should read 'sLength' from this to compute the
+  -- expected 'OutputRef' of pending bridge-in outputs.
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix StateInfoResPrefix, CamelToSnake]] StateInfoResponse
+
+instance ToSchema StateInfoResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @StateInfoResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Current rollup state info including chain length"
 
 -- ---------------------------------------------------------------------------
 -- Indexing Types

@@ -232,10 +232,10 @@ endToEndTests setup =
             -- Step 6b: Query L2 UTxOs after batch 1
             -- After tx1+tx2: address has 5 ADA + 25 asset2, address2 has 5 ADA + 25 asset2
             let [outTx3_1 :*: _, _] = Ex3.tx3 & outputs & unComp1 & fromVector
-            QueryL2UtxosResponse utxos1Addr ← handleQueryL2Utxos aggCtx Ex3.address
+            QueryL2UtxosResponse {qlurUtxos = utxos1Addr} ← handleQueryL2Utxos aggCtx Ex3.address
             assertEqual "UTxO output at address after batch 1" [outTx3_1] (uOutput <$> utxos1Addr)
 
-            QueryL2UtxosResponse utxos1Addr2 ← handleQueryL2Utxos aggCtx Ex3.address2
+            QueryL2UtxosResponse {qlurUtxos = utxos1Addr2} ← handleQueryL2Utxos aggCtx Ex3.address2
             assertEqual "UTxO output at address2 after batch 1" [outTx3_1 {oAddress = Ex3.address2}] (uOutput <$> utxos1Addr2)
 
             -- tx3: 1 bridge-out (5 ADA + 25 asset2 to bridge-out address)
@@ -304,10 +304,10 @@ endToEndTests setup =
 
             -- Step 8b: Query L2 UTxOs after batch 2
             let [out1 :*: _, out2 :*: _] = Ex3.tx4 & outputs & unComp1 & fromVector
-            QueryL2UtxosResponse utxos2Addr ← handleQueryL2Utxos aggCtx Ex3.address
+            QueryL2UtxosResponse {qlurUtxos = utxos2Addr} ← handleQueryL2Utxos aggCtx Ex3.address
             assertEqual "UTxO output at address after batch 2" [out2] (uOutput <$> utxos2Addr)
 
-            QueryL2UtxosResponse utxos2Addr2 ← handleQueryL2Utxos aggCtx Ex3.address2
+            QueryL2UtxosResponse {qlurUtxos = utxos2Addr2} ← handleQueryL2Utxos aggCtx Ex3.address2
             assertEqual "UTxO output at address2 after batch 2" [out1] (uOutput <$> utxos2Addr2)
 
             info "End-to-end test passed"
