@@ -20,6 +20,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
   QueryL2UtxosResponse (..),
+  StateInfoResponse (..),
 
   -- * Indexing Types
   TxStatus (..),
@@ -255,6 +256,29 @@ instance ToSchema QueryL2UtxosResponse where
     return $
       schema
         & OpenApi.schema . OpenApi.description ?~ "Response containing UTxOs at the given L2 address"
+
+type StateInfoResPrefix ∷ Symbol
+type StateInfoResPrefix = "sir"
+
+newtype StateInfoResponse = StateInfoResponse
+  { sirState ∷ Maybe (State Bi Bo Ud A I)
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix StateInfoResPrefix, CamelToSnake]] StateInfoResponse
+
+instance ToSchema StateInfoResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @StateInfoResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Current rollup state info"
 
 -- ---------------------------------------------------------------------------
 -- Indexing Types
