@@ -143,6 +143,18 @@ components:
         ff80aaaf03a273b8f5c558168dc0e2377eea810badbae6eceefc14ef.474f4c44: 101
         lovelace: 22
       type: object
+    Hash:
+      properties:
+        hash:
+          type: integer
+        value:
+          items:
+            $ref: '#/components/schemas/Output_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          type: array
+      required:
+      - hash
+      - value
+      type: object
     OutputRef_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
         orIndex:
@@ -188,6 +200,31 @@ components:
       - utxos
       type: object
     QueuedTx: {}
+    StateInfoResponse:
+      description: Current rollup state info
+      properties:
+        state:
+          $ref: '#/components/schemas/State_Natural_1_1_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+      type: object
+    State_Natural_1_1_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
+      properties:
+        sBridgeIn:
+          $ref: '#/components/schemas/Hash'
+        sBridgeOut:
+          $ref: '#/components/schemas/Hash'
+        sLength:
+          type: integer
+        sPreviousStateHash:
+          type: integer
+        sUTxO:
+          type: integer
+      required:
+      - sPreviousStateHash
+      - sUTxO
+      - sLength
+      - sBridgeIn
+      - sBridgeOut
+      type: object
     SubmitL1TxRequest:
       description: Request parameters to submit the L1 transaction
       properties:
@@ -224,8 +261,8 @@ components:
             items:
             - $ref: '#/components/schemas/AffinePoint'
             - items:
-              - type: integer
               - $ref: '#/components/schemas/AffinePoint'
+              - type: integer
               maxItems: 2
               minItems: 2
               type: array
@@ -234,7 +271,7 @@ components:
             type: array
           type: array
         transaction:
-          $ref: '#/components/schemas/Transaction_2_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          $ref: '#/components/schemas/Transaction_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
       required:
       - transaction
       - signatures
@@ -251,7 +288,7 @@ components:
       - status
       - tx_hash
       type: object
-    Transaction_2_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
+    Transaction_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
         inputs:
           items:
@@ -363,9 +400,8 @@ paths:
         name: id
         required: true
         schema:
-          format: int64
-          maximum: 9223372036854775807
-          minimum: -9223372036854775808
+          exclusiveMinimum: false
+          minimum: 0
           type: integer
       responses:
         '200':
@@ -499,6 +535,20 @@ paths:
       summary: Submit signed L1 transaction
       tags:
       - L1 transactions
+  /v0/state:
+    get:
+      description: Return the current persisted rollup state (chain length, UTxO tree
+        root, etc.), or null if the rollup has not been seeded yet.
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/StateInfoResponse'
+          description: ''
+      summary: Get rollup state info
+      tags:
+      - L2 utxo queries
   /v0/tx:
     post:
       description: Enqueue a signed L2 transaction for batching. The transaction is
@@ -546,9 +596,10 @@ paths:
       - Transaction indexing
   /v0/txs:
     get:
-      description: 'Return a paginated list of all transactions that have an output
-        destined for the given L2 address, ordered newest first. Defaults: limit =
-        20, offset = 0.'
+      description: 'Return a paginated list of all transactions that involve the given
+        L2 address, either as a recipient of an output or as a sender (i.e. one of
+        the transaction''s inputs was previously locked at that address), ordered
+        newest first. Defaults: limit = 20, offset = 0.'
       parameters:
       - in: query
         name: l2address

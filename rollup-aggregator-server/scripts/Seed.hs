@@ -13,9 +13,8 @@ import Options.Applicative
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initialState)
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (saveState)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (initDb, saveState)
 import ZkFold.Cardano.Rollup.Aggregator.Types
-import ZkFold.Symbolic.Ledger.Types (nullUTxO)
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Cardano.Rollup.Types
@@ -25,6 +24,7 @@ import ZkFold.Symbolic.Ledger.Circuit.Compile (
   ledgerSetup,
   mkSetup,
  )
+import ZkFold.Symbolic.Ledger.Types (nullUTxO)
 
 main ∷ IO ()
 main = runCommand =<< execParser opts
@@ -70,7 +70,7 @@ parseRollupSeedCommand =
     <*> strOption
       ( long "state-file"
           <> metavar "STATE_FILE"
-          <> help "Path of initial state JSON file for server persistence."
+          <> help "Path to DB file to save initial state for server persistence."
       )
     <*> option
       auto
@@ -134,6 +134,7 @@ runCommand RollupSeedCommand {..} = do
 
     let initialUtxoPreimage = pure (nullUTxO @A @I)
     createDirectoryIfMissing True (takeDirectory rscStateFile)
+    initDb rscStateFile
     saveState rscStateFile state0 initialUtxoPreimage
     Prelude.putStrLn $ "Initial state written to: " <> rscStateFile
 

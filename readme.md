@@ -112,7 +112,7 @@ We provide a script to deploy rollup and this script would also generate relevan
 cabal run rollup-seed -- \
   --config secrets/maestro-config-preprod.json \
   --signing-key secrets/test-wallet.skey \
-  --state-file secrets/rollup-state.json \
+  --state-file rollup.db \
   --output secrets/out.yaml \
   --max-bridge-in 1 \
   --max-bridge-out 1 \
