@@ -204,14 +204,10 @@ components:
       description: Current rollup state info
       properties:
         state:
-          $ref: '#/components/schemas/State_Natural_1_1_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          $ref: '#/components/schemas/State_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
       type: object
-    State_Natural_1_1_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
+    State_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
-        sBridgeIn:
-          $ref: '#/components/schemas/Hash'
-        sBridgeOut:
-          $ref: '#/components/schemas/Hash'
         sLength:
           type: integer
         sPreviousStateHash:
@@ -222,8 +218,6 @@ components:
       - sPreviousStateHash
       - sUTxO
       - sLength
-      - sBridgeIn
-      - sBridgeOut
       type: object
     SubmitL1TxRequest:
       description: Request parameters to submit the L1 transaction
