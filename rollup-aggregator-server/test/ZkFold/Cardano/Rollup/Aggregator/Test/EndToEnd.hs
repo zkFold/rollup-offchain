@@ -86,10 +86,12 @@ endToEndTests setup =
         initDb dbPath
         batcherState ← initBatcherState dbPath
         setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
-        let setupBytes =
-              -- ledgerSetup @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.Ixs @Ex3.Oxs @Ex3.TxCount @Ex3.I ts circuit
-              --   & mkSetup
-              fromMaybe undefined (Aeson.decode setupBytesJson)
+        let
+          -- circuit = ledgerCircuit @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I
+          setupBytes =
+            -- ledgerSetup @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I ts circuit
+            --   & mkSetup
+            fromMaybe (error "Unable to decode setup-bytes") (Aeson.decode setupBytesJson)
         pure (dbPath, batcherState, setupBytes)
     )
     (\_ → pure ())
@@ -161,7 +163,7 @@ endToEndTests setup =
             info "Bridge-in tx submitted and confirmed"
 
             -- Step 6: Submit L2 txs via handleSubmitTx
-            -- Ex3.sigs is batch-level (Vector TxCount :.: Vector Ixs :.: ...), extract per-tx signatures
+            -- Ex3.sigs is batch-level (Vector TxCount :.: Vector S :.: ...), extract per-tx signatures
             let perTxSigs = fromVector $ unComp1 Ex3.sigs
                 perTxSigs2 = fromVector $ unComp1 Ex3.sigs2
 

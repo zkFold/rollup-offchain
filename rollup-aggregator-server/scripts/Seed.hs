@@ -108,8 +108,8 @@ runCommand RollupSeedCommand {..} = do
 
   Prelude.putStrLn "Generating setup parameters (this may take a while)..."
   ts ← powersOfTauSubset
-  let compiledCircuit = ledgerCircuit @Bi @Bo @Ud @A @Ixs @Oxs @TxCount @I
-  let setupB = ledgerSetup @ByteString @Bi @Bo @Ud @A @Ixs @Oxs @TxCount @I ts compiledCircuit & mkSetup
+  let compiledCircuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
+  let setupB = ledgerSetup @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
 
   withCfgProviders coreConfig "rollup-seed" $ \providers → do
     (initializedBuildInfo, txBodySeed) ←

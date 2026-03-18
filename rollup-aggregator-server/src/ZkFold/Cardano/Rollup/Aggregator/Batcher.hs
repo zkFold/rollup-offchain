@@ -58,6 +58,8 @@ import GeniusYield.Types (
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenValue)
 import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
+import ZkFold.Algebra.EllipticCurve.Class (TwistedEdwards (..))
+import ZkFold.Symbolic.Data.EllipticCurve.Point.Affine (AffinePoint (..))
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (
@@ -82,7 +84,7 @@ import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
 import ZkFold.Symbolic.Data.Bool (BoolType (false))
 import ZkFold.Symbolic.Data.Bool qualified as ZkBool
-import ZkFold.Symbolic.Data.Hash (hash)
+import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
   LedgerCircuit,
@@ -100,8 +102,9 @@ import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 data BatcherState = BatcherState
   { bsLedgerStateVar ∷ !(TVar (State Bi Bo Ud A I))
   , bsUtxoPreimageVar ∷ !(TVar (Leaves Ud (UTxO A I)))
+  , bsMerkleTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
   , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
-  , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A Ixs Oxs TxCount)
+  , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A S N TxCount)
   , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
   }
 
@@ -112,12 +115,14 @@ initBatcherState dbPath = do
   let (initSt, initUtxo) = case mPersisted of
         Just (PersistedState st utxo) → (st, utxo)
         Nothing → (initialState, initialUtxoPreimage)
+      initTree = SymMerkle.fromLeaves (fmap (hHash . hash) initUtxo)
   stateVar ← newTVarIO initSt
   utxoVar ← newTVarIO initUtxo
+  treeVar ← newTVarIO initTree
   ts ← powersOfTauSubset
-  let circuit = ledgerCircuit @Bi @Bo @Ud @A @Ixs @Oxs @TxCount @I
+  let circuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
-  pure $ BatcherState stateVar utxoVar ts circuit proverSecret
+  pure $ BatcherState stateVar utxoVar treeVar ts circuit proverSecret
  where
   initialUtxoPreimage = pure (nullUTxO @A @I)
 
@@ -128,7 +133,7 @@ initialState ∷ State Bi Bo Ud A I
 initialState =
   State
     { sPreviousStateHash = zero
-    , sUTxO = emptyTree
+    , sUTxO = SymMerkle.mHash emptyTree
     , sLength = zero
     , sBridgeIn = hash (Comp1 (pure (nullOutput @A @I)))
     , sBridgeOut = hash (Comp1 (pure (nullOutput @A @I)))
@@ -267,16 +272,16 @@ processBatchWithLogging ctx@Ctx {..} bs ids queued =
 
 processBatch ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
 processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
-  (prevState, prevUtxoPreimage) ←
+  (prevState, prevUtxoPreimage, prevTree) ←
     atomically $
-      (,) <$> readTVar bsLedgerStateVar <*> readTVar bsUtxoPreimageVar
+      (,,) <$> readTVar bsLedgerStateVar <*> readTVar bsUtxoPreimageVar <*> readTVar bsMerkleTreeVar
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
       batch = TransactionBatch {tbTransactions = unsafeToVector' (map qtTransaction queuedTxs)}
       sigMaterial = Comp1 (unsafeToVector' (map qtSignatures queuedTxs))
       allBridgeOuts = concatMap qtBridgeOuts queuedTxs
-      newState :*: witness :*: preimageWrapped =
-        updateLedgerState prevState prevUtxoPreimage bridgedIn batch sigMaterial
+      newState :*: witness :*: newTree :*: preimageWrapped =
+        updateLedgerState prevState prevTree prevUtxoPreimage bridgedIn batch sigMaterial
       newPreimage = unComp1 preimageWrapped
       lci =
         LedgerContractInput
@@ -316,6 +321,7 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
   atomically $ do
     writeTVar bsLedgerStateVar newState
     writeTVar bsUtxoPreimageVar newPreimage
+    writeTVar bsMerkleTreeVar newTree
   saveState ctxDbPath newState newPreimage
   recordBatchDb ctxDbPath ids (Text.pack (show submittedTxId))
   pure submittedTxId
