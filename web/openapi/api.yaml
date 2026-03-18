@@ -143,18 +143,6 @@ components:
         ff80aaaf03a273b8f5c558168dc0e2377eea810badbae6eceefc14ef.474f4c44: 101
         lovelace: 22
       type: object
-    Hash:
-      properties:
-        hash:
-          type: integer
-        value:
-          items:
-            $ref: '#/components/schemas/Output_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
-          type: array
-      required:
-      - hash
-      - value
-      type: object
     OutputRef_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
         orIndex:
@@ -204,14 +192,10 @@ components:
       description: Current rollup state info
       properties:
         state:
-          $ref: '#/components/schemas/State_Natural_1_1_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          $ref: '#/components/schemas/State_Natural_Natural_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
       type: object
-    State_Natural_1_1_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
+    State_Natural_Natural_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
-        sBridgeIn:
-          $ref: '#/components/schemas/Hash'
-        sBridgeOut:
-          $ref: '#/components/schemas/Hash'
         sLength:
           type: integer
         sPreviousStateHash:
@@ -222,8 +206,6 @@ components:
       - sPreviousStateHash
       - sUTxO
       - sLength
-      - sBridgeIn
-      - sBridgeOut
       type: object
     SubmitL1TxRequest:
       description: Request parameters to submit the L1 transaction

@@ -100,7 +100,7 @@ import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 -- | In-process mutable state and cryptographic material for the batcher.
 data BatcherState = BatcherState
-  { bsLedgerStateVar ∷ !(TVar (State Bi Bo Ud A I))
+  { bsLedgerStateVar ∷ !(TVar (State Ud A I))
   , bsUtxoPreimageVar ∷ !(TVar (Leaves Ud (UTxO A I)))
   , bsMerkleTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
   , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
@@ -129,14 +129,12 @@ initBatcherState dbPath = do
 emptyTree ∷ SymMerkle.MerkleTree Ud I
 emptyTree = SymMerkle.fromLeaves (pure (nullUTxOHash @A @I))
 
-initialState ∷ State Bi Bo Ud A I
+initialState ∷ State Ud A I
 initialState =
   State
     { sPreviousStateHash = zero
     , sUTxO = SymMerkle.mHash emptyTree
     , sLength = zero
-    , sBridgeIn = hash (Comp1 (pure (nullOutput @A @I)))
-    , sBridgeOut = hash (Comp1 (pure (nullOutput @A @I)))
     }
 
 -- | Enqueue a transaction by writing it to the SQLite database.

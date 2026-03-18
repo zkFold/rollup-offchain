@@ -7,7 +7,6 @@ import Data.Function ((&))
 import ZkFold.Algebra.Class (PrimeField (..), ToConstant (..))
 import ZkFold.Cardano.UPLC.RollupSimple.Types
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Data.Hash (Hash (hHash))
 import ZkFold.Symbolic.Interpreter (Interpreter)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Types.State
@@ -17,12 +16,10 @@ feToInteger ∷ (PrimeField a, IntegralOf a ~ Integer) ⇒ FieldElement (Interpr
 feToInteger = toIntegral . toConstant
 
 -- | Symbolic 'State' to Plutus 'RollupState'.
-stateToRollupState ∷ ∀ bi bo ud a. State bi bo ud a RollupBFInterpreter → RollupState
+stateToRollupState ∷ ∀ ud a. State ud a RollupBFInterpreter → RollupState
 stateToRollupState State {..} =
   RollupState
     { utxoTreeRoot = sUTxO & feToInteger
     , previousStateHash = feToInteger sPreviousStateHash
     , chainLength = feToInteger sLength
-    , bridgeOutCommitment = sBridgeOut & hHash & feToInteger
-    , bridgeInCommitment = sBridgeIn & hHash & feToInteger
     }

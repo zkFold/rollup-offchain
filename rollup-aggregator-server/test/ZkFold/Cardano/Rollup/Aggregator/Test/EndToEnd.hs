@@ -73,9 +73,10 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
 import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Data.Vector (fromVector)
--- import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup)
+-- import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup, ledgerCircuit)
 import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
 import ZkFold.Symbolic.Ledger.Types (Output (..), Transaction (..), UTxO (..))
+-- import ZkFold.Protocol.NonInteractiveProof.TrustedSetup (powersOfTauSubset)
 
 endToEndTests ∷ Setup → TestTree
 endToEndTests setup =
@@ -85,6 +86,7 @@ endToEndTests setup =
         removePathForcibly dbPath
         initDb dbPath
         batcherState ← initBatcherState dbPath
+        -- ts <- powersOfTauSubset
         setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
         let
           -- circuit = ledgerCircuit @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I

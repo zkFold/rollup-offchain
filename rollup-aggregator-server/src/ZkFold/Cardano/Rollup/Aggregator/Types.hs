@@ -261,7 +261,7 @@ type StateInfoResPrefix ∷ Symbol
 type StateInfoResPrefix = "sir"
 
 newtype StateInfoResponse = StateInfoResponse
-  { sirState ∷ Maybe (State Bi Bo Ud A I)
+  { sirState ∷ Maybe (State Ud A I)
   }
   deriving stock Generic
   deriving
