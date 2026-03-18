@@ -103,8 +103,6 @@ setupBytes:
   omegaNPrv_int: 42951892408294048319804799042074961265671975460177021439280319919049700054024
   omega_int: 42951892408294048319804799042074961265671975460177021439280319919049700054024
   pow: 18
-
-
 ```
 
 We provide a script to deploy rollup and this script would also generate relevant configuration parameters to be used in configuration file. Script can be executed like:
