@@ -1,8 +1,8 @@
 module ZkFold.Cardano.Rollup.Aggregator.Types (
   -- * Fixed Ledger Parameters
   I,
-  Ixs,
-  Oxs,
+  S,
+  N,
   A,
   Bi,
   Bo,
@@ -58,9 +58,9 @@ import ZkFold.Symbolic.Ledger.Types.Orphans ()
 
 type I = RollupBFInterpreter
 
-type Ixs = 2
+type S = 2
 
-type Oxs = 2
+type N = 2
 
 type A = 2
 
@@ -68,13 +68,13 @@ type Bi = 1
 
 type Bo = 1
 
-type Ud = 2
+type Ud = 10
 
 type TxCount = 2
 
-type Tx = Transaction Ixs Oxs A I
+type Tx = Transaction N A I
 
-type TxSignatures = (Vector Ixs :.: (EdDSAPoint :*: EdDSAScalarField :*: PublicKey)) I
+type TxSignatures = (Vector S :.: (PublicKey :*: EdDSAPoint :*: EdDSAScalarField)) I
 
 data QueuedTx = QueuedTx
   { qtTransaction ∷ !Tx

@@ -33,8 +33,8 @@ import ZkFold.Symbolic.Ledger.Examples.One (
   Bi,
   Bo,
   I,
-  Ixs,
-  Oxs,
+  N,
+  S,
   TxCount,
   Ud,
   address,
@@ -55,7 +55,7 @@ lci =
     , lciNewState = newState
     }
 
-compiledCircuit = ledgerCircuit @Bi @Bo @Ud @A @Ixs @Oxs @TxCount @I
+compiledCircuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
 
 proverSecret = PlonkupProverSecret (pure zero)
 
@@ -79,7 +79,7 @@ rollupUpdateTests setup =
     ( do
         ts ← powersOfTauSubset
         let
-          setupB = ledgerSetup @ByteString @Bi @Bo @Ud @A @Ixs @Oxs @TxCount @I ts compiledCircuit & mkSetup
+          setupB = ledgerSetup @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
           proofB = ledgerProof @ByteString ts proverSecret compiledCircuit lci & mkProof
           proofB2 = ledgerProof @ByteString ts proverSecret compiledCircuit lci2 & mkProof
         pure (ts, setupB, proofB, proofB2)

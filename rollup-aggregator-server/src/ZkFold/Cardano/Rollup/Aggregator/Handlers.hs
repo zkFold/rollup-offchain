@@ -67,6 +67,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
   BridgeOutsResponse (..),
+  I,
   PendingTxsResponse (..),
   QueryL2UtxosResponse (..),
   QueuedTx (..),
