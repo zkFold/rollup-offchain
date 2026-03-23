@@ -25,6 +25,8 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   SubmitL1TxResponse (..),
   QueryL2UtxosResponse (..),
   StateInfoResponse (..),
+  ConvertAddressRequest (..),
+  ConvertAddressResponse (..),
 
   -- * Indexing Types
   TxStatus (..),
@@ -51,15 +53,16 @@ import Deriving.Aeson
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeLits (Symbol)
 import GeniusYield.Swagger.Utils (dropSymbolAndCamelToSnake)
-import GeniusYield.Types (GYAddress, GYAddressBech32, GYTx, GYTxId, GYTxWitness, GYValue, LowerFirst)
+import GeniusYield.Types (GYAddress, GYAddressBech32, GYTx, GYTxId, GYTxWitness, GYValue)
 import GeniusYield.Types.OpenApi ()
 import ZkFold.Algebra.Number (Natural, value)
-import ZkFold.Cardano.Rollup.Aggregator.Orphans ()
 import ZkFold.Data.Vector (Vector)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Types.Orphans ()
+
+import ZkFold.Cardano.Rollup.Aggregator.Orphans ()
 
 type I = RollupBFInterpreter
 
@@ -89,10 +92,53 @@ data QueuedTx = QueuedTx
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix "qt", LowerFirst, CamelToSnake]] QueuedTx
+    via CustomJSON '[FieldLabelModifier '[StripPrefix "qt", CamelToSnake]] QueuedTx
 
 instance ToSchema QueuedTx where
   declareNamedSchema _ = return $ NamedSchema (Just "QueuedTx") mempty
+
+type ConvertAddressPrefix ∷ Symbol
+type ConvertAddressPrefix = "car"
+
+newtype ConvertAddressRequest = ConvertAddressRequest
+  { carAddress ∷ GYAddressBech32
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix ConvertAddressPrefix, CamelToSnake]] ConvertAddressRequest
+
+instance ToSchema ConvertAddressRequest where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @ConvertAddressPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Request parameters to convert Cardano address into a dummy L2 address"
+
+newtype ConvertAddressResponse = ConvertAddressResponse
+  { carL2Address ∷ FieldElement RollupBFInterpreter
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix ConvertAddressPrefix, CamelToSnake]] ConvertAddressResponse
+
+instance ToSchema ConvertAddressResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @ConvertAddressPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Dummy L2 address corresponding to a Cardano address"
 
 type SubmitTxReqPrefix ∷ Symbol
 type SubmitTxReqPrefix = "str"
@@ -105,7 +151,7 @@ data SubmitTxRequest = SubmitTxRequest
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitTxReqPrefix, LowerFirst, CamelToSnake]] SubmitTxRequest
+    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitTxReqPrefix, CamelToSnake]] SubmitTxRequest
 
 instance ToSchema SubmitTxRequest where
   declareNamedSchema proxy = do
@@ -129,7 +175,7 @@ data SubmitTxResponse = SubmitTxResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitTxResPrefix, LowerFirst, CamelToSnake]] SubmitTxResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitTxResPrefix, CamelToSnake]] SubmitTxResponse
 
 instance ToSchema SubmitTxResponse where
   declareNamedSchema proxy = do
@@ -143,7 +189,6 @@ instance ToSchema SubmitTxResponse where
       schema
         & OpenApi.schema . OpenApi.description ?~ "Response to the L2 transaction submission"
 
-
 type TxHashReqPrefix ∷ Symbol
 type TxHashReqPrefix = "thr"
 
@@ -153,7 +198,7 @@ newtype TxHashRequest = TxHashRequest
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix TxHashReqPrefix, LowerFirst, CamelToSnake]] TxHashRequest
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxHashReqPrefix, CamelToSnake]] TxHashRequest
 
 instance ToSchema TxHashRequest where
   declareNamedSchema proxy = do
@@ -171,12 +216,12 @@ type TxHashResPrefix ∷ Symbol
 type TxHashResPrefix = "thr"
 
 newtype TxHashResponse = TxHashResponse
-  { thrHash ∷ FieldElement RollupBFInterpreter 
+  { thrHash ∷ FieldElement RollupBFInterpreter
   }
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix TxHashResPrefix, LowerFirst, CamelToSnake]] TxHashResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxHashResPrefix, CamelToSnake]] TxHashResponse
 
 instance ToSchema TxHashResponse where
   declareNamedSchema proxy = do
@@ -194,14 +239,14 @@ type TxParametersPrefix ∷ Symbol
 type TxParametersPrefix = "tpr"
 
 data TxParametersResponse = TxParametersResponse
-  { tprInputs ∷ !Natural 
-  , tprOutputs ∷ !Natural 
-  , tprAssets ∷ !Natural 
+  { tprInputs ∷ !Natural
+  , tprOutputs ∷ !Natural
+  , tprAssets ∷ !Natural
   }
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix TxParametersPrefix, LowerFirst, CamelToSnake]] TxParametersResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxParametersPrefix, CamelToSnake]] TxParametersResponse
 
 instance ToSchema TxParametersResponse where
   declareNamedSchema proxy = do
@@ -215,12 +260,12 @@ instance ToSchema TxParametersResponse where
       schema
         & OpenApi.schema . OpenApi.description ?~ "The hash of on L2 transaction"
 
-txParameters :: TxParametersResponse
+txParameters ∷ TxParametersResponse
 txParameters = TxParametersResponse {..}
-  where
-    tprInputs = value @Ixs
-    tprOutputs = value @Oxs
-    tprAssets = value @A
+ where
+  tprInputs = value @Ixs
+  tprOutputs = value @Oxs
+  tprAssets = value @A
 
 type BridgeInReqPrefix ∷ Symbol
 type BridgeInReqPrefix = "bir"
@@ -234,7 +279,7 @@ data BridgeInRequest = BridgeInRequest
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeInReqPrefix, LowerFirst, CamelToSnake]] BridgeInRequest
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeInReqPrefix, CamelToSnake]] BridgeInRequest
 
 instance ToSchema BridgeInRequest where
   declareNamedSchema proxy = do
@@ -257,7 +302,7 @@ newtype BridgeInResponse = BridgeInResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeInResPrefix, LowerFirst, CamelToSnake]] BridgeInResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix BridgeInResPrefix, CamelToSnake]] BridgeInResponse
 
 instance ToSchema BridgeInResponse where
   declareNamedSchema proxy = do
@@ -281,7 +326,7 @@ data SubmitL1TxRequest = SubmitL1TxRequest
   deriving stock Generic
   deriving
     FromJSON
-    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitL1TxReqPrefix, LowerFirst, CamelToSnake]] SubmitL1TxRequest
+    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitL1TxReqPrefix, CamelToSnake]] SubmitL1TxRequest
 
 instance ToSchema SubmitL1TxRequest where
   declareNamedSchema proxy = do
@@ -304,7 +349,7 @@ newtype SubmitL1TxResponse = SubmitL1TxResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitL1TxResPrefix, LowerFirst, CamelToSnake]] SubmitL1TxResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix SubmitL1TxResPrefix, CamelToSnake]] SubmitL1TxResponse
 
 instance ToSchema SubmitL1TxResponse where
   declareNamedSchema proxy = do
@@ -327,7 +372,7 @@ newtype QueryL2UtxosResponse = QueryL2UtxosResponse
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix QueryL2UtxosResPrefix, LowerFirst, CamelToSnake]] QueryL2UtxosResponse
+    via CustomJSON '[FieldLabelModifier '[StripPrefix QueryL2UtxosResPrefix, CamelToSnake]] QueryL2UtxosResponse
 
 instance ToSchema QueryL2UtxosResponse where
   declareNamedSchema proxy = do
@@ -369,10 +414,10 @@ instance ToSchema StateInfoResponse where
 -- ---------------------------------------------------------------------------
 
 data TxStatus = TxPending | TxProcessing | TxBatched
-  deriving stock (Eq, Show, Generic)
+  deriving stock (Eq, Generic, Show)
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[ConstructorTagModifier '[StripPrefix "Tx", LowerFirst]] TxStatus
+    via CustomJSON '[ConstructorTagModifier '[StripPrefix "Tx"]] TxStatus
 
 instance ToSchema TxStatus where
   declareNamedSchema proxy =
