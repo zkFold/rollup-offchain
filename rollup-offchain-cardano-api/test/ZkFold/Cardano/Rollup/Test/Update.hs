@@ -15,7 +15,7 @@ import Test.Tasty (TestTree, testGroup, withResource)
 import Test.Tasty.HUnit (testCaseSteps)
 import ZkFold.Algebra.Class (Zero (..))
 import ZkFold.Cardano.Rollup.Api
-import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
+import ZkFold.Cardano.Rollup.Api.Utils (computeDelta, stateToRollupState)
 import ZkFold.Cardano.Rollup.Types
 import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
 import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
@@ -40,6 +40,8 @@ import ZkFold.Symbolic.Ledger.Examples.One (
   address,
   batch,
   batch2,
+  bridgedIn,
+  bridgedIn2,
   newState,
   newState2,
   prevState,
@@ -73,6 +75,10 @@ lci2 =
 
 rollupState2 = stateToRollupState newState2
 
+delta1 = computeDelta @Bi @Bo @Ud @A @S @N @TxCount witness batch bridgedIn newState
+
+delta2 = computeDelta @Bi @Bo @Ud @A @S @N @TxCount witness2 batch2 bridgedIn2 newState2
+
 rollupUpdateTests ∷ Setup → TestTree
 rollupUpdateTests setup =
   withResource
@@ -103,7 +109,7 @@ rollupUpdateTests setup =
             txBodyUpdate ←
               ctxRunBuilder ctx fundUser $
                 runReaderT
-                  (updateRollupState rollupState1 [(valueFromLovelace 5_000_000, address)] [] proofBPlutus >>= buildTxBody)
+                  (updateRollupState rollupState1 [(valueFromLovelace 5_000_000, address)] [] proofBPlutus delta1 >>= buildTxBody)
                   initializedBuildInfo
             tidUpdate ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate
             info $ "Update rollup transaction submitted: " <> show tidUpdate
@@ -122,6 +128,7 @@ rollupUpdateTests setup =
                         )
                       ]
                       proofB2Plutus
+                      delta2
                       >>= buildTxBody
                   )
                   initializedBuildInfo
@@ -149,7 +156,7 @@ rollupUpdateTests setup =
             txBodyUpdate ←
               ctxRunBuilder ctx fundUser $
                 runReaderT
-                  (updateRollupState rollupState1 [] [] proofBPlutus >>= buildTxBody)
+                  (updateRollupState rollupState1 [] [] proofBPlutus delta1 >>= buildTxBody)
                   initializedBuildInfo
             tidUpdate ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate
             info $ "Update rollup transaction submitted: " <> show tidUpdate
@@ -168,6 +175,7 @@ rollupUpdateTests setup =
                         )
                       ]
                       proofB2Plutus
+                      delta2
                       >>= buildTxBody
                   )
                   initializedBuildInfo

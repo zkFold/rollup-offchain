@@ -164,8 +164,10 @@ updateRollupState
   → [(GYValue, GYAddress)]
   -- ^ Value to bridge-out.
   → ProofBytes
+  → [Integer]
+  -- ^ Tree delta: flattened list of field elements encoding Merkle tree leaf changes.
   → m (GYTxSkeleton 'PlutusV3)
-updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
+updateRollupState newState bridgeIns' bridgeOuts' proofBytes treeDelta = do
   ZKInitializedRollupBuildInfo {..} ← ask
   rollupAddr ← rollupAddress
   nid ← networkId
@@ -301,9 +303,9 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes = do
                   (GYBuildPlutusScriptReference zkirbiRollupStakeRef zkirbiRollupStake)
                   ( redeemerFromPlutusData $
                       RollupSimpleRed
-                        { rsrProofBytes =
-                            proofBytes
+                        { rsrProofBytes = proofBytes
                         , rsrAddress = addressToPlutus rollupAddr
+                        , rsrDelta = treeDelta
                         }
                   )
             }

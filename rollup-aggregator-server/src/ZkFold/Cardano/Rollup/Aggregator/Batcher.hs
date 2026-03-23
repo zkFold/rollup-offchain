@@ -74,7 +74,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
-import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
+import ZkFold.Cardano.Rollup.Api.Utils (computeDelta, stateToRollupState)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
 import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
 import ZkFold.Cardano.UPLC.RollupSimple.Types (BridgeUtxoStatus (..))
@@ -82,7 +82,7 @@ import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Data.Vector (Vector, fromVector)
 import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
-import ZkFold.Symbolic.Data.Bool (BoolType (false))
+import ZkFold.Symbolic.Data.Bool (BoolType (false, true))
 import ZkFold.Symbolic.Data.Bool qualified as ZkBool
 import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
@@ -100,7 +100,7 @@ import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 -- | In-process mutable state and cryptographic material for the batcher.
 data BatcherState = BatcherState
-  { bsLedgerStateVar ∷ !(TVar (State Ud A I))
+  { bsLedgerStateVar ∷ !(TVar (State I))
   , bsUtxoPreimageVar ∷ !(TVar (Leaves Ud (UTxO A I)))
   , bsMerkleTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
   , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
@@ -129,7 +129,7 @@ initBatcherState dbPath = do
 emptyTree ∷ SymMerkle.MerkleTree Ud I
 emptyTree = SymMerkle.fromLeaves (pure (nullUTxOHash @A @I))
 
-initialState ∷ State Ud A I
+initialState ∷ State I
 initialState =
   State
     { sPreviousStateHash = zero
@@ -297,6 +297,7 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
       proofBytes = mkProof proof
       proofPlutus = proofToPlutus proofBytes
       rollupState = stateToRollupState newState
+      delta = computeDelta witness batch bridgedIn newState
       collateral = Just (ctxCollateral, False)
   submittedTxId ←
     runGYTxMonadIO
@@ -313,7 +314,7 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         -- to see BridgeIn outputs not covered by the ZK proof.
         let biCount = fromIntegral (natVal (Proxy @Bi))
             bridgeInsForL1 = take biCount $ map (\(addr, val) → (val, fromConstant addr)) bridgeInData
-        skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus) ctxRollupBuildInfo
+        skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus delta) ctxRollupBuildInfo
         body ← buildTxBody skel
         signAndSubmitConfirmed body
   atomically $ do
