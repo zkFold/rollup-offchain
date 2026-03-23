@@ -39,7 +39,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Types
 
 -- | State persisted to the SQLite database across restarts.
 data PersistedState = PersistedState
-  { psLedgerState ∷ !(State Ud A I)
+  { psLedgerState ∷ !(State I)
   , psUtxoPreimage ∷ !(Leaves Ud (UTxO A I))
   }
   deriving stock Generic
@@ -314,7 +314,7 @@ txStatusFromText "batched" = Just TxBatched
 txStatusFromText _ = Nothing
 
 -- | Persist ledger state and UTxO preimage to the database (single-row upsert).
-saveState ∷ FilePath → State Ud A I → Leaves Ud (UTxO A I) → IO ()
+saveState ∷ FilePath → State I → Leaves Ud (UTxO A I) → IO ()
 saveState dbPath ledgerState utxoPreimage = withConn dbPath $ \conn →
   execute
     conn
