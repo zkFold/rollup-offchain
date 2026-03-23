@@ -4,6 +4,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
 
   -- * Individual Handlers
   handleHealth,
+  handleConvertAddress,
   handleSubmitTx,
   handleTxHash,
   handleBridgeIn,
@@ -47,6 +48,15 @@ import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..))
 import PlutusLedgerApi.V1.Value qualified as Plutus
 import Servant (ServerError (..), ServerT, err400, err404, (:<|>) (..))
 import ZkFold.Algebra.Class (fromConstant, one)
+import ZkFold.Cardano.Rollup.Api
+import ZkFold.Data.Vector (fromVector)
+import ZkFold.Symbolic.Data.Bool (fromBool)
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Data.Hash (Hashable (..))
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
+import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..))
+import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
+
 import ZkFold.Cardano.Rollup.Aggregator.Api (AggregatorAPI)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (enqueueTx)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (
@@ -70,6 +80,8 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeInRequest (..),
   BridgeInResponse (..),
   BridgeOutsResponse (..),
+  ConvertAddressRequest (..),
+  ConvertAddressResponse (..),
   I,
   PendingTxsResponse (..),
   QueryL2UtxosResponse (..),
@@ -79,11 +91,11 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   SubmitL1TxResponse (..),
   SubmitTxRequest (..),
   SubmitTxResponse (..),
-  TxResponse (..),
-  TxsByAddressResponse (..),
   TxHashRequest (..),
   TxHashResponse (..),
   TxParametersResponse (..),
+  TxResponse (..),
+  TxsByAddressResponse (..),
   txParameters,
  )
 import ZkFold.Cardano.Rollup.Api
@@ -100,6 +112,7 @@ import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
 aggregatorServer ∷ Ctx → ServerT AggregatorAPI IO
 aggregatorServer ctx =
   handleHealth ctx
+    :<|> handleConvertAddress ctx
     :<|> handleSubmitTx ctx
     :<|> handleTxHash ctx
     :<|> handleTxParameters ctx
@@ -117,6 +130,15 @@ aggregatorServer ctx =
 -- | Handle health check requests.
 handleHealth ∷ Ctx → IO ()
 handleHealth _ctx = pure ()
+
+handleConvertAddress ∷ Ctx → ConvertAddressRequest → IO ConvertAddressResponse
+handleConvertAddress _ ConvertAddressRequest {..} = pure $ ConvertAddressResponse $ bech32ToFE carAddress
+
+bech32ToFE ∷ GYAddressBech32 → FieldElement RollupBFInterpreter
+bech32ToFE addrBech32 = expectedAddrFe
+ where
+  addr = addressFromBech32 addrBech32
+  expectedAddrFe = fromConstant $ byteStringToInteger' $ addressToBS $ addressToPlutus addr
 
 -- | Handle L2 transaction submission.
 handleSubmitTx ∷ Ctx → SubmitTxRequest → IO SubmitTxResponse
@@ -136,20 +158,17 @@ handleSubmitTx ctx SubmitTxRequest {..} = do
               txHash ← enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs strInputUtxos
               pure $ SubmitTxResponse "queued" txHash
  where
-  validateAddr (out :*: _, (_, addrBech32)) =
-    let addr = addressFromBech32 addrBech32
-        expectedAddrFe = fromConstant $ byteStringToInteger' $ addressToBS $ addressToPlutus addr
-     in expectedAddrFe == oAddress out
+  validateAddr (out :*: _, (_, addrBech32)) = bech32ToFE addrBech32 == oAddress out
 
   validateValue (out :*: _, (val, _)) = matchesBridgeOutValue out val
 
 handleTxHash ∷ Ctx → TxHashRequest → IO TxHashResponse
 handleTxHash _ctx TxHashRequest {..} = pure $ TxHashResponse {..}
-  where
-    thrHash = hasher thrTransaction
+ where
+  thrHash = hasher thrTransaction
 
 handleTxParameters ∷ Ctx → IO TxParametersResponse
-handleTxParameters _ctx = pure txParameters 
+handleTxParameters _ctx = pure txParameters
 
 -- | Check if a 'GYValue' matches the symbolic assets of an 'Output'.
 matchesBridgeOutValue ∷ KnownNat a ⇒ Output a I → GYValue → Bool
