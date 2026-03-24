@@ -14,9 +14,10 @@ import Control.Concurrent.STM (
   atomically,
   newTVarIO,
   readTVar,
+  readTVarIO,
   writeTVar,
  )
-import Control.Exception (Exception, Handler (Handler), catches, displayException)
+import Control.Exception (Exception, Handler (Handler), catches, displayException, throwIO)
 import Control.Monad (forM, forever)
 import Data.List (nub)
 import Control.Monad.Reader (asks, runReaderT)
@@ -69,6 +70,9 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   enqueueTxDb,
   loadState,
   recordBatchDb,
+  failTxsDb,
+  getPendingTxsWithIdsDb,
+  revertProcessingTxsDb,
   revertTxsDb,
   saveState,
  )
@@ -84,6 +88,7 @@ import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
 import ZkFold.Symbolic.Data.Bool (BoolType (false, true))
 import ZkFold.Symbolic.Data.Bool qualified as ZkBool
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
@@ -106,6 +111,8 @@ data BatcherState = BatcherState
   , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
   , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A S N TxCount)
   , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
+  , bsExternalUpdateVar ∷ !(TVar Bool)
+  -- ^ Set to True by chain sync when state was updated by another aggregator.
   }
 
 -- | Initialise batcher state by loading persisted state from the SQLite database.
@@ -119,10 +126,11 @@ initBatcherState dbPath = do
   stateVar ← newTVarIO initSt
   utxoVar ← newTVarIO initUtxo
   treeVar ← newTVarIO initTree
+  externalUpdateVar ← newTVarIO False
   ts ← powersOfTauSubset
   let circuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
-  pure $ BatcherState stateVar utxoVar treeVar ts circuit proverSecret
+  pure $ BatcherState stateVar utxoVar treeVar ts circuit proverSecret externalUpdateVar
  where
   initialUtxoPreimage = pure (nullUTxO @A @I)
 
@@ -138,24 +146,64 @@ initialState =
     }
 
 -- | Enqueue a transaction by writing it to the SQLite database.
--- Both output addresses (receiving) and input addresses (spending, resolved from
--- the persisted UTxO preimage) are stored in 'tx_addresses' for indexed lookup.
+-- Verifies that:
+--   1. Each non-null input ref has a matching user-provided UTxO.
+--   2. Each provided UTxO's hash exists in the persisted Merkle tree (best-effort check).
 -- Returns the transaction hash (JSON-encoded txId field element).
+-- Throws an error if verification fails.
 enqueueTx ∷ Ctx → QueuedTx → IO Text
 enqueueTx ctx queued = do
   let tx = qtTransaction queued
-      outs = fromVector (unComp1 (outputs tx))
-      outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
       inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
-  mState ← loadState (ctxDbPath ctx)
-  let inAddrs = case mState of
-        Nothing → []
-        Just ps →
-          let utxoList = filter (/= nullUTxO) $ fromVector (psUtxoPreimage ps)
-           in [ decodeUtf8 . toStrict . encode $ oAddress (uOutput u)
-              | ref ← inRefs, u ← utxoList, uRef u == ref
-              ]
-  enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
+      providedUtxos = filter (/= nullUTxO) (qtInputUtxos queued)
+  -- Verify: each non-null input ref must have a matching user-provided UTxO.
+  let mismatched = [ ref | ref ← inRefs, not (any (\u → uRef u == ref) providedUtxos) ]
+  if not (null mismatched)
+    then throwIO $ userError "enqueueTx: input UTxO data missing for one or more non-null inputs"
+    else do
+      -- Best-effort hash verification against persisted preimage.
+      mState ← loadState (ctxDbPath ctx)
+      case mState of
+        Just ps → do
+          let preimageHashes ∷ [FieldElement I] =
+                map (hHash . hash) $ fromVector (psUtxoPreimage ps)
+          let invalidUtxos =
+                [ u
+                | u ← providedUtxos
+                , let h ∷ FieldElement I = hHash (hash u)
+                , h `notElem` preimageHashes
+                ]
+          if not (null invalidUtxos)
+            then throwIO $ userError "enqueueTx: provided UTxO hash does not match any leaf in the Merkle tree"
+            else pure ()
+        Nothing → pure () -- No persisted state yet, skip verification.
+      let outs = fromVector (unComp1 (outputs tx))
+          outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
+          inAddrs = map (decodeUtf8 . toStrict . encode . oAddress . uOutput) providedUtxos
+      enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
+
+-- | Revalidate all pending transactions against the current in-memory state.
+-- Transactions whose non-null input OutputRefs don't match any known UTxO in the
+-- preimage are marked as 'failed' (their inputs were consumed by another aggregator).
+revalidatePendingTxs ∷ Ctx → BatcherState → IO ()
+revalidatePendingTxs Ctx {..} BatcherState {..} = do
+  pending ← getPendingTxsWithIdsDb ctxDbPath
+  preimage ← readTVarIO bsUtxoPreimageVar
+  let knownRefs = map uRef $ filter (/= nullUTxO) $ fromVector preimage
+      isInputValid ref = ref == nullOutputRef || ref `elem` knownRefs
+      invalidIds =
+        [ tid
+        | (tid, qtx) ← pending
+        , let inRefs = fromVector (unComp1 (inputs (qtTransaction qtx)))
+        , not (all isInputValid inRefs)
+        ]
+  if null invalidIds
+    then pure ()
+    else do
+      gyLogInfo ctxProviders mempty $
+        "Revalidation: failing " <> show (length invalidIds)
+          <> " pending txs with consumed inputs"
+      failTxsDb ctxDbPath invalidIds
 
 -- | Query the rollup address for 'BridgeInInitial' UTxOs, returning L2 address and value.
 queryBridgeIns ∷ Ctx → IO [(Integer, GYValue)]
@@ -221,6 +269,7 @@ nullQueuedTx =
           }
     , qtSignatures = Comp1 (pure (zero :*: zero :*: zero))
     , qtBridgeOuts = []
+    , qtInputUtxos = []
     }
 
 -- | Run the batcher loop (blocking). Polls the database at the configured interval
@@ -231,6 +280,20 @@ startBatcher ∷ Ctx → BatcherState → IO ()
 startBatcher ctx@Ctx {..} bs = forever $ do
   let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
   threadDelay delayMicros
+  -- Check for external state updates from chain sync.
+  externalUpdate ← atomically $ do
+    updated ← readTVar (bsExternalUpdateVar bs)
+    writeTVar (bsExternalUpdateVar bs) False
+    pure updated
+  if externalUpdate
+    then do
+      gyLogInfo ctxProviders mempty "External state update detected, re-syncing"
+      -- Revert any 'processing' txs back to 'pending' (they may reference stale state).
+      revertProcessingTxsDb ctxDbPath
+      -- Revalidate pending txs: fail those whose inputs no longer exist.
+      revalidatePendingTxs ctx bs
+    else do
+      pure ()
   bridgeInData ← queryBridgeIns ctx
   if not (null bridgeInData)
     then do

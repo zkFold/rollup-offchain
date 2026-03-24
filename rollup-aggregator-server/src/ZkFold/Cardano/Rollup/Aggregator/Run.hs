@@ -30,6 +30,7 @@ import ZkFold.Cardano.Rollup.Types (
 import ZkFold.Cardano.Rollup.Aggregator.Api
 import ZkFold.Cardano.Rollup.Aggregator.Auth
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, startBatcher)
+import ZkFold.Cardano.Rollup.Aggregator.ChainSync (startChainSync)
 import ZkFold.Cardano.Rollup.Aggregator.Config
 import ZkFold.Cardano.Rollup.Aggregator.Ctx
 import ZkFold.Cardano.Rollup.Aggregator.ErrorMiddleware
@@ -81,6 +82,7 @@ withCtx mConfigPath action = do
             , ctxRollupBuildInfo = buildInfo
             , ctxBatchConfig = scBatchConfig serverConfig
             , ctxDbPath = scDbPath serverConfig
+            , ctxNodeSocketPath = scNodeSocketPath serverConfig
             }
     action serverConfig ctx
 
@@ -167,4 +169,12 @@ runBatcher mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
   let logInfoS = gyLogInfo (ctxProviders ctx) mempty
   logConfig "Batcher" logInfoS ctx serverConfig
   batcherState ← initBatcherState (ctxDbPath ctx)
+  -- Start chain sync in background if node socket path is configured.
+  case ctxNodeSocketPath ctx of
+    Just socketPath → do
+      logInfoS $ "Starting chain sync client (socket: " <> socketPath <> ")"
+      _chainSyncAsync ← startChainSync ctx batcherState socketPath
+      pure ()
+    Nothing →
+      logInfoS "No node socket path configured; chain sync disabled (single-aggregator mode)"
   startBatcher ctx batcherState

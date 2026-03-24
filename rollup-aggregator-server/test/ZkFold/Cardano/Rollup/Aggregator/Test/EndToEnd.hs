@@ -144,6 +144,7 @@ endToEndTests setup =
                     , AggCtx.ctxRollupBuildInfo = buildInfo
                     , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
                     , AggCtx.ctxDbPath = dbPath
+                    , AggCtx.ctxNodeSocketPath = Nothing
                     }
 
             -- Step 4: Bridge-in via handleBridgeIn (10 ADA + 50 asset2)
@@ -175,6 +176,7 @@ endToEndTests setup =
                     { strTransaction = Ex3.tx1
                     , strSignatures = head perTxSigs
                     , strBridgeOuts = []
+                    , strInputUtxos = []
                     }
             SubmitTxResponse {strStatus = status1, strTxHash = txHash1} ← handleSubmitTx aggCtx strReq1
             assertEqual "L2 tx1 queued" "queued" status1
@@ -193,6 +195,7 @@ endToEndTests setup =
                     { strTransaction = Ex3.tx2
                     , strSignatures = perTxSigs !! 1
                     , strBridgeOuts = []
+                    , strInputUtxos = []
                     }
             SubmitTxResponse {strStatus = status2, strTxHash = txHash2} ← handleSubmitTx aggCtx strReq2
             assertEqual "L2 tx2 queued" "queued" status2
@@ -249,6 +252,7 @@ endToEndTests setup =
                     { strTransaction = Ex3.tx3
                     , strSignatures = head perTxSigs2
                     , strBridgeOuts = [(bridgeOutValue, bridgeOutAddr)]
+                    , strInputUtxos = []
                     }
             SubmitTxResponse {strStatus = status3, strTxHash = txHash3} ← handleSubmitTx aggCtx strReq3
             assertEqual "L2 tx3 queued" "queued" status3
@@ -268,6 +272,7 @@ endToEndTests setup =
                     { strTransaction = Ex3.tx4
                     , strSignatures = perTxSigs2 !! 1
                     , strBridgeOuts = []
+                    , strInputUtxos = []
                     }
             SubmitTxResponse {strStatus = status4, strTxHash = txHash4} ← handleSubmitTx aggCtx strReq4
             assertEqual "L2 tx4 queued" "queued" status4

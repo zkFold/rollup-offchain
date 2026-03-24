@@ -92,6 +92,8 @@ data ServerConfig = ServerConfig
   -- ^ API key.
   , scDbPath ∷ !FilePath
   -- ^ SQLite database file path for the transaction queue and ledger state.
+  , scNodeSocketPath ∷ !(Maybe FilePath)
+  -- ^ Path to the cardano-node socket. Required for chain sync (batcher mode).
   }
   deriving stock Generic
   deriving
