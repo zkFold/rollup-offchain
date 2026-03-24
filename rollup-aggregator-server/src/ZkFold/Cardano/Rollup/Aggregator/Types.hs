@@ -253,7 +253,6 @@ type TxParametersPrefix = "tpr"
 
 data TxParametersResponse = TxParametersResponse
   { tprInputs ∷ !Natural
-  , tprOutputs ∷ !Natural
   , tprAssets ∷ !Natural
   }
   deriving stock Generic
@@ -276,8 +275,7 @@ instance ToSchema TxParametersResponse where
 txParameters ∷ TxParametersResponse
 txParameters = TxParametersResponse {..}
  where
-  tprInputs = value @Ixs
-  tprOutputs = value @Oxs
+  tprInputs = value @N
   tprAssets = value @A
 
 type BridgeInReqPrefix ∷ Symbol

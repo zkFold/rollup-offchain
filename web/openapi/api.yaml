@@ -309,7 +309,7 @@ components:
       description: Calculate the hash of an L2 transaction
       properties:
         transaction:
-          $ref: '#/components/schemas/Transaction_2_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          $ref: '#/components/schemas/Transaction_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
       required:
       - transaction
       type: object
@@ -332,13 +332,8 @@ components:
           exclusiveMinimum: false
           minimum: 0
           type: integer
-        outputs:
-          exclusiveMinimum: false
-          minimum: 0
-          type: integer
       required:
       - inputs
-      - outputs
       - assets
       type: object
     TxRecord:
