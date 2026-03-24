@@ -48,6 +48,7 @@ import GeniusYield.Types (
   filterUTxOs,
   gyLogError,
   gyLogInfo,
+  gyLogWarning,
   nonAdaTokenToAssetClass,
   utxoRef,
   utxoValue,
@@ -146,41 +147,71 @@ initialState =
     }
 
 -- | Enqueue a transaction by writing it to the SQLite database.
--- Verifies that:
+--
+-- If the user provides input UTxOs ('qtInputUtxos'), verifies that:
 --   1. Each non-null input ref has a matching user-provided UTxO.
---   2. Each provided UTxO's hash exists in the persisted Merkle tree (best-effort check).
+--   2. Each provided UTxO's hash exists in the persisted Merkle tree (best-effort).
+--
+-- If no input UTxOs are provided (empty list), falls back to resolving input
+-- addresses from the persisted preimage (backward compatible). The aggregator
+-- will use its own preimage at batch time; if the preimage is unknown for some
+-- inputs (after an external state update), batch processing will fail and the
+-- transaction will be retried or failed during revalidation.
+--
 -- Returns the transaction hash (JSON-encoded txId field element).
 -- Throws an error if verification fails.
 enqueueTx ∷ Ctx → QueuedTx → IO Text
 enqueueTx ctx queued = do
   let tx = qtTransaction queued
-      inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
       providedUtxos = filter (/= nullUTxO) (qtInputUtxos queued)
-  -- Verify: each non-null input ref must have a matching user-provided UTxO.
-  let mismatched = [ ref | ref ← inRefs, not (any (\u → uRef u == ref) providedUtxos) ]
-  if not (null mismatched)
-    then throwIO $ userError "enqueueTx: input UTxO data missing for one or more non-null inputs"
-    else do
-      -- Best-effort hash verification against persisted preimage.
-      mState ← loadState (ctxDbPath ctx)
-      case mState of
-        Just ps → do
-          let preimageHashes ∷ [FieldElement I] =
-                map (hHash . hash) $ fromVector (psUtxoPreimage ps)
-          let invalidUtxos =
-                [ u
-                | u ← providedUtxos
-                , let h ∷ FieldElement I = hHash (hash u)
-                , h `notElem` preimageHashes
-                ]
-          if not (null invalidUtxos)
-            then throwIO $ userError "enqueueTx: provided UTxO hash does not match any leaf in the Merkle tree"
-            else pure ()
-        Nothing → pure () -- No persisted state yet, skip verification.
+  if null providedUtxos
+    then do
+      -- Backward-compatible path: resolve addresses from persisted preimage.
       let outs = fromVector (unComp1 (outputs tx))
           outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
-          inAddrs = map (decodeUtf8 . toStrict . encode . oAddress . uOutput) providedUtxos
+          inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
+      mState ← loadState (ctxDbPath ctx)
+      let inAddrs = case mState of
+            Nothing → []
+            Just ps →
+              let utxoList = filter (/= nullUTxO) $ fromVector (psUtxoPreimage ps)
+               in [ decodeUtf8 . toStrict . encode $ oAddress (uOutput u)
+                  | ref ← inRefs, u ← utxoList, uRef u == ref
+                  ]
       enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
+    else do
+      -- Strict path: user provides input UTxOs.
+      let inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
+      -- Verify: each non-null input ref must have a matching user-provided UTxO.
+      let mismatched = [ ref | ref ← inRefs, not (any (\u → uRef u == ref) providedUtxos) ]
+      if not (null mismatched)
+        then throwIO $ userError "enqueueTx: input UTxO data missing for one or more non-null inputs"
+        else do
+          -- Best-effort hash verification against persisted preimage.
+          -- This is a soft check: UTxOs from pending txs in the same batch
+          -- won't be in the tree yet, so mismatches are logged as warnings
+          -- rather than hard errors. The ZK proof provides the final guarantee.
+          mState ← loadState (ctxDbPath ctx)
+          case mState of
+            Just ps → do
+              let preimageHashes ∷ [FieldElement I] =
+                    map (hHash . hash) $ fromVector (psUtxoPreimage ps)
+              let unknownUtxos =
+                    [ u
+                    | u ← providedUtxos
+                    , let h ∷ FieldElement I = hHash (hash u)
+                    , h `notElem` preimageHashes
+                    ]
+              if not (null unknownUtxos)
+                then gyLogWarning (ctxProviders ctx) mempty $
+                  "enqueueTx: " <> show (length unknownUtxos)
+                    <> " provided UTxO(s) not found in current Merkle tree (may be from pending txs)"
+                else pure ()
+            Nothing → pure ()
+          let outs = fromVector (unComp1 (outputs tx))
+              outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
+              inAddrs = map (decodeUtf8 . toStrict . encode . oAddress . uOutput) providedUtxos
+          enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
 
 -- | Revalidate all pending transactions against the current in-memory state.
 -- Transactions whose non-null input OutputRefs don't match any known UTxO in the
