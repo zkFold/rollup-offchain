@@ -74,8 +74,10 @@ import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Data.Vector (fromVector)
 -- import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup, ledgerCircuit)
+import ZkFold.Algebra.Class (Zero (zero))
+import ZkFold.Symbolic.Data.Hash (Hash (hHash))
 import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
-import ZkFold.Symbolic.Ledger.Types (Output (..), Transaction (..), UTxO (..))
+import ZkFold.Symbolic.Ledger.Types (Output (..), OutputRef (..), Transaction (..), UTxO (..), txId)
 -- import ZkFold.Protocol.NonInteractiveProof.TrustedSetup (powersOfTauSubset)
 
 endToEndTests ∷ Setup → TestTree
@@ -246,17 +248,22 @@ endToEndTests setup =
             assertEqual "UTxO output at address2 after batch 1" [outTx3_1 {oAddress = Ex3.address2}] (uOutput <$> utxos1Addr2)
 
             -- tx3: 1 bridge-out (5 ADA + 25 asset2 to bridge-out address)
+            -- Use the STRICT path: query L2 UTxOs and provide them as input data.
+            -- tx3 spends UTxOs at Ex3.address and Ex3.address2 (both exist after batch 1).
+            QueryL2UtxosResponse tx3InputsAddr ← handleQueryL2Utxos aggCtx Ex3.address
+            QueryL2UtxosResponse tx3InputsAddr2 ← handleQueryL2Utxos aggCtx Ex3.address2
+            info $ "Queried L2 UTxOs for tx3 inputs: " <> show (length tx3InputsAddr) <> " at address, " <> show (length tx3InputsAddr2) <> " at address2"
             let bridgeOutValue = valueFromLovelace 5_000_000 <> fakeValue asset2 25_000_000
                 strReq3 =
                   SubmitTxRequest
                     { strTransaction = Ex3.tx3
                     , strSignatures = head perTxSigs2
                     , strBridgeOuts = [(bridgeOutValue, bridgeOutAddr)]
-                    , strInputUtxos = []
+                    , strInputUtxos = tx3InputsAddr <> tx3InputsAddr2
                     }
             SubmitTxResponse {strStatus = status3, strTxHash = txHash3} ← handleSubmitTx aggCtx strReq3
-            assertEqual "L2 tx3 queued" "queued" status3
-            info "L2 tx3 queued"
+            assertEqual "L2 tx3 queued (strict path)" "queued" status3
+            info "L2 tx3 queued (strict path with user-provided UTxOs)"
 
             -- Indexing: after tx3, 1 pending tx; 1 pending bridge-out for bridgeOutAddr
             PendingTxsResponse {ptrTxs = ptxsAfterTx3} ← handlePendingTxs aggCtx
@@ -267,16 +274,25 @@ endToEndTests setup =
             assertEqual "bridge-out tx hash matches tx3" txHash3 (boeTxHash (head boutsAfterTx3))
 
             -- tx4: no bridge-outs
-            let strReq4 =
+            -- Use the STRICT path: tx4 spends tx3's first output (index 0), which
+            -- doesn't exist in the tree yet (tx3 is still pending). Construct the
+            -- UTxO from known tx3 data — this is what a real client would do.
+            let (tx3Out0 :*: _) = head $ fromVector $ unComp1 $ outputs Ex3.tx3
+                tx4InputUtxo =
+                  UTxO
+                    { uRef = OutputRef {orTxId = hHash (txId Ex3.tx3), orIndex = zero}
+                    , uOutput = tx3Out0
+                    }
+                strReq4 =
                   SubmitTxRequest
                     { strTransaction = Ex3.tx4
                     , strSignatures = perTxSigs2 !! 1
                     , strBridgeOuts = []
-                    , strInputUtxos = []
+                    , strInputUtxos = [tx4InputUtxo]
                     }
             SubmitTxResponse {strStatus = status4, strTxHash = txHash4} ← handleSubmitTx aggCtx strReq4
-            assertEqual "L2 tx4 queued" "queued" status4
-            info "L2 tx4 queued"
+            assertEqual "L2 tx4 queued (strict path)" "queued" status4
+            info "L2 tx4 queued (strict path with constructed UTxO)"
 
             -- Indexing: after tx4, 2 pending txs (tx3 + tx4)
             PendingTxsResponse {ptrTxs = ptxsAfterTx4} ← handlePendingTxs aggCtx
