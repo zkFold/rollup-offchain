@@ -6,6 +6,9 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   dequeueAvailableTxsDb,
   recordBatchDb,
   revertTxsDb,
+  revertProcessingTxsDb,
+  getPendingTxsWithIdsDb,
+  failTxsDb,
   getTxByHashDb,
   getPendingTxsDb,
   getTxsByAddressDb,
@@ -184,6 +187,13 @@ revertTxsDb dbPath ids = withConn dbPath $ \conn →
         "UPDATE txs SET status='pending', batch_id=NULL WHERE id=?"
         (Only tid)
 
+-- | Revert all 'processing' transactions back to 'pending'.
+-- Used after detecting an external state update that may have invalidated
+-- in-flight batch computations.
+revertProcessingTxsDb ∷ FilePath → IO ()
+revertProcessingTxsDb dbPath = withConn dbPath $ \conn →
+  execute_ conn "UPDATE txs SET status='pending', batch_id=NULL WHERE status='processing'"
+
 -- | Look up a single transaction by its SHA256 hash.
 getTxByHashDb ∷ FilePath → Text → IO (Maybe TxRecord)
 getTxByHashDb dbPath txHash = withConn dbPath $ \conn → do
@@ -204,6 +214,27 @@ getPendingTxsDb dbPath = withConn dbPath $ \conn → do
       conn
       "SELECT id, tx_hash, payload, status, batch_id, submitted_at FROM txs WHERE status='pending' ORDER BY id"
   return (catMaybes (map parseTxRow rows))
+
+-- | Return all pending transactions with their database IDs and parsed payloads.
+getPendingTxsWithIdsDb ∷ FilePath → IO [(Int64, QueuedTx)]
+getPendingTxsWithIdsDb dbPath = withConn dbPath $ \conn → do
+  rows ∷ [(Int64, Text)] ←
+    query_
+      conn
+      "SELECT id, payload FROM txs WHERE status='pending' ORDER BY id"
+  return $ catMaybes $ map (\(tid, payload) → case eitherDecodeStrict (encodeUtf8 payload) of
+    Right qtx → Just (tid, qtx)
+    Left _ → Nothing) rows
+
+-- | Mark specific transactions as 'failed'.
+failTxsDb ∷ FilePath → [Int64] → IO ()
+failTxsDb dbPath ids = withConn dbPath $ \conn →
+  withTransaction conn $
+    forM_ ids $ \tid →
+      execute
+        conn
+        "UPDATE txs SET status='failed' WHERE id=?"
+        (Only tid)
 
 -- | Paginated tx history for an L2 address (JSON-encoded FieldElement text).
 getTxsByAddressDb ∷ FilePath → Text → Natural → Natural → IO [TxRecord]

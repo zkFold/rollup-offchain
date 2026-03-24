@@ -57,6 +57,7 @@ library
     ZkFold.Cardano.Rollup.Aggregator.Run
     ZkFold.Cardano.Rollup.Aggregator.SwaggerUI
     ZkFold.Cardano.Rollup.Aggregator.Types
+    ZkFold.Cardano.Rollup.Aggregator.ChainSync
     ZkFold.Cardano.Rollup.Aggregator.Utils
 
   other-modules:
@@ -67,8 +68,13 @@ library
 
   build-depends:
     aeson,
+    async,
     atlas-cardano,
     base >=4.18.2.1 && <5,
+    cardano-api,
+    cardano-ledger-alonzo,
+    cardano-ledger-core,
+    containers,
     binary,
     bytestring,
     deriving-aeson,
@@ -83,6 +89,7 @@ library
     openapi3,
     optparse-applicative,
     plutus-ledger-api,
+    plutus-tx,
     rollup-offchain-cardano-api,
     servant-foreign,
     servant-openapi3,

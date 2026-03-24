@@ -122,7 +122,7 @@ handleSubmitTx ctx SubmitTxRequest {..} = do
             then throwIO $ err400 {errBody = "bridge-out value mismatch"}
             else do
               let bridgeOutPairs = map (second addressFromBech32) strBridgeOuts
-              txHash ← enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs
+              txHash ← enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs strInputUtxos
               pure $ SubmitTxResponse "queued" txHash
  where
   validateAddr (out :*: _, (_, addrBech32)) =

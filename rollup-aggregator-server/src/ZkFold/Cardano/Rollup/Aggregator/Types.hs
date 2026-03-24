@@ -11,6 +11,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   Tx,
   TxSignatures,
   QueuedTx (..),
+  SymUTxO,
 
   -- * API Types
   SubmitTxRequest (..),
@@ -76,10 +77,16 @@ type Tx = Transaction N A I
 
 type TxSignatures = (Vector S :.: (PublicKey :*: EdDSAPoint :*: EdDSAScalarField)) I
 
+-- | Type alias for a symbolic UTxO in the interpreter context.
+type SymUTxO = UTxO A I
+
 data QueuedTx = QueuedTx
   { qtTransaction ∷ !Tx
   , qtSignatures ∷ !TxSignatures
   , qtBridgeOuts ∷ ![(GYValue, GYAddress)]
+  , qtInputUtxos ∷ ![SymUTxO]
+  -- ^ User-provided full UTxO data for each non-null input. Used to resolve
+  -- input addresses and as witness data when the aggregator's preimage is unknown.
   }
   deriving stock Generic
   deriving
@@ -96,6 +103,8 @@ data SubmitTxRequest = SubmitTxRequest
   { strTransaction ∷ !Tx
   , strSignatures ∷ !TxSignatures
   , strBridgeOuts ∷ ![(GYValue, GYAddressBech32)]
+  , strInputUtxos ∷ ![SymUTxO]
+  -- ^ Full UTxO data for each non-null input the transaction spends.
   }
   deriving stock Generic
   deriving
