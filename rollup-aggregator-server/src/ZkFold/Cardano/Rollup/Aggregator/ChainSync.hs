@@ -264,6 +264,19 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
     writeTVar (bsStateHistoryVar bs) $
       take 20 ((slot, currentState, currentLeafHashes) : history)
 
+  -- Verify tree root matches on-chain root. A mismatch indicates the delta
+  -- application is imprecise (e.g. null input positions in the delta don't
+  -- correspond to real Merkle tree changes). The Batcher handles this by
+  -- rebuilding the tree from the preimage DB, so a mismatch here is not fatal
+  -- but is logged for diagnostics.
+  let computedRoot = feToInteger (SymMerkle.mHash newTree)
+      expectedRoot = utxoTreeRoot newRollupState
+  when (computedRoot /= expectedRoot) $
+    gyLogWarning (ctxProviders ctx) mempty $
+      "Chain sync: tree root mismatch after delta (computed=" <> show computedRoot
+        <> ", on-chain=" <> show expectedRoot
+        <> "). Batcher will rebuild tree from preimage DB."
+
   -- Persist to SQLite for crash recovery.
   saveState (ctxDbPath ctx) newState newLeafHashes
   gyLogInfo (ctxProviders ctx) mempty $
