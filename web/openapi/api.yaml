@@ -563,7 +563,7 @@ paths:
           description: ''
         '400':
           description: Invalid `body`
-      summary: Convert Cardano address into a dummy L2 address
+      summary: Obtain Symbolic representation of a Cardano address
       tags:
       - Address
   /v0/l1/tx/submit:

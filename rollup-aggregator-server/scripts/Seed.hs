@@ -12,9 +12,6 @@ import GeniusYield.Types
 import Options.Applicative
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
-import ZkFold.Cardano.Rollup.Aggregator.Batcher (initialState)
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (initDb, saveState)
-import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Cardano.Rollup.Types
@@ -26,6 +23,10 @@ import ZkFold.Symbolic.Ledger.Circuit.Compile (
   mkSetup,
  )
 import ZkFold.Symbolic.Ledger.Types (nullUTxO)
+
+import ZkFold.Cardano.Rollup.Aggregator.Batcher (initialState)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (initDb, saveState)
+import ZkFold.Cardano.Rollup.Aggregator.Types
 
 main ∷ IO ()
 main = runCommand =<< execParser opts

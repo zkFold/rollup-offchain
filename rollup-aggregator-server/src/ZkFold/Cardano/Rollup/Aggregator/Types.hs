@@ -56,7 +56,7 @@ import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeLits (Symbol)
 import GHC.TypeNats (type (^))
 import GeniusYield.Swagger.Utils (dropSymbolAndCamelToSnake)
-import GeniusYield.Types (GYAddress, GYAddressBech32, GYTx, GYTxId, GYTxWitness, GYValue)
+import GeniusYield.Types (GYAddress, GYAddressBech32, GYTx, GYTxId, GYTxWitness, GYValue, LowerFirst)
 import GeniusYield.Types.OpenApi ()
 import ZkFold.Algebra.Number (Natural, value)
 import ZkFold.Data.Vector (Vector)
@@ -428,7 +428,7 @@ data TxStatus = TxPending | TxProcessing | TxBatched
   deriving stock (Eq, Generic, Show)
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[ConstructorTagModifier '[StripPrefix "Tx"]] TxStatus
+    via CustomJSON '[ConstructorTagModifier '[StripPrefix "Tx", LowerFirst]] TxStatus
 
 instance ToSchema TxStatus where
   declareNamedSchema =

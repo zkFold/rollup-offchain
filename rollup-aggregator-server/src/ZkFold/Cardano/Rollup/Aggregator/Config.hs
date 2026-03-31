@@ -51,7 +51,7 @@ data BatchConfig = BatchConfig
   , bcBatchIntervalSeconds ∷ !Natural
   -- ^ How often to create batches (in seconds).
   }
-  deriving stock (Show, Eq, Generic)
+  deriving stock (Eq, Generic, Show)
   deriving
     (FromJSON, ToJSON)
     via CustomJSON '[FieldLabelModifier '[StripPrefix "bc", LowerFirst]] BatchConfig
