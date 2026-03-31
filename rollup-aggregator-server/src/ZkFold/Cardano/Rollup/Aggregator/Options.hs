@@ -9,6 +9,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Options (
 ) where
 
 import Options.Applicative
+
 import ZkFold.Cardano.Rollup.Aggregator.Run (runBatcher, runServer)
 
 data Command = Serve ServeCommand | Batch BatchCommand
