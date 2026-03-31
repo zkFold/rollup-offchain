@@ -1,24 +1,34 @@
--- | Chain sync client for monitoring rollup state updates by other aggregators.
+-- | Chain sync client for monitoring rollup state updates.
 --
 -- Connects to a local Cardano node via the Ouroboros ChainSync mini-protocol.
--- For each new block, scans for transactions that update the rollup state UTxO
--- (identified by the NFT). When an external update is detected, extracts the
--- tree delta from the staking withdrawal redeemer and applies it to the local
--- Merkle tree state.
+-- ChainSync is the **single source of truth** for the Merkle tree and rollup
+-- state. It maintains the tree leaf hashes from on-chain deltas and handles
+-- rollbacks via an in-memory state history (up to 20 snapshots).
+--
+-- The Batcher communicates preimage data (full UTxO objects for leaf hashes it
+-- created) via the @utxo_preimages@ SQLite table — an append-only store keyed
+-- by leaf hash. ChainSync never reads or writes preimages; it operates
+-- exclusively on hashes.
 module ZkFold.Cardano.Rollup.Aggregator.ChainSync (
   startChainSync,
 ) where
 
 import Cardano.Api qualified as Api
 import Cardano.Api.ChainSync.Client qualified as Api.Sync
+import Cardano.Api.Shelley qualified as Api.S
+import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
+import Cardano.Ledger.Plutus.Data qualified as Ledger
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async qualified as Async
-import Control.Concurrent.STM (TVar, atomically, readTVarIO, writeTVar)
+import Control.Concurrent.STM (atomically, readTVar, readTVarIO, writeTVar)
 import Control.Exception (SomeException, catch)
+import Control.Lens ((^.))
 import Control.Monad (forM_, when)
 import Data.Function ((&))
 import Data.List (find)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
+import Data.Word (Word64)
 import GeniusYield.Providers.Node (networkIdToLocalNodeConnectInfo)
 import GeniusYield.Types (
   GYNonAdaToken (..),
@@ -28,28 +38,20 @@ import GeniusYield.Types (
   mintingPolicyIdToApi,
   tokenNameToApi,
  )
-import Cardano.Api.Shelley qualified as Api.S
-import Cardano.Ledger.Alonzo.TxWits qualified as Ledger
-import Cardano.Ledger.Plutus.Data qualified as Ledger
-import Control.Lens ((^.))
-import Data.Map.Strict qualified as Map
 import PlutusTx qualified
-import ZkFold.Algebra.Class (FromConstant (..), zero)
+import ZkFold.Algebra.Class (FromConstant (..))
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (PersistedState (..), loadState)
-import ZkFold.Cardano.Rollup.Aggregator.Types (A, Bi, Bo, I, N, TxCount, Ud)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (saveState)
+import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, N, TxCount, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
 import ZkFold.Cardano.UPLC.RollupSimple.Types (RollupSimpleRed (..), RollupState (..))
-import ZkFold.Algebra.Field (fromZp, toZp)
 import ZkFold.Data.MerkleTree (Leaves)
-import ZkFold.Data.MerkleTree qualified as BaseMerkle
 import ZkFold.Data.Vector (fromVector, unsafeToVector)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
-import ZkFold.Symbolic.Ledger.Types (State (..), UTxO, nullUTxO)
+import ZkFold.Symbolic.Ledger.Types (State (..), nullUTxOHash)
 
 -- | Data extracted from an on-chain rollup state update.
 data RollupStateUpdate = RollupStateUpdate
@@ -122,43 +124,54 @@ chainSyncClient ctx bs =
       }
 
 -- | Process a new block: scan for rollup state updates.
+-- ChainSync is the single writer for the Merkle tree and state TVars.
 handleRollForward ∷ Ctx → BatcherState → Api.BlockInMode → IO ()
-handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra (Api.Block _header txs)) = do
-  let nft = zkirbiNFT (ctxRollupBuildInfo ctx)
+handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra (Api.Block header txs)) = do
+  let Api.BlockHeader (Api.SlotNo slot) _ _ = header
+      nft = zkirbiNFT (ctxRollupBuildInfo ctx)
       updates = mapMaybe (findRollupUpdate nft) txs
   forM_ updates $ \RollupStateUpdate {..} → do
-    -- Check if this is our own update or an external one.
     currentState ← readTVarIO (bsLedgerStateVar bs)
     let localChainLen = feToInteger (sLength currentState)
         onChainLen = chainLength rsuNewRollupState
-    when (onChainLen > localChainLen) $ do
-      gyLogWarning (ctxProviders ctx) mempty $
-        "Chain sync: external state update detected (chain length "
-          <> show localChainLen
-          <> " → "
-          <> show onChainLen
-          <> "), applying delta"
-      applyExternalUpdate ctx bs rsuNewRollupState rsuDelta
+        onChainRoot = utxoTreeRoot rsuNewRollupState
+        localRoot = feToInteger (sUTxO currentState)
+    -- Process this update if it advances beyond our current state,
+    -- or if it represents a different state at the same length (fork).
+    -- During replay from genesis, old blocks (onChainLen <= localChainLen
+    -- with matching root) are skipped because the loaded state already
+    -- reflects them.
+    when (onChainLen > localChainLen || (onChainLen == localChainLen && onChainRoot /= localRoot)) $ do
+      gyLogInfo (ctxProviders ctx) mempty $
+        "Chain sync: applying state update (chain len " <> show localChainLen
+          <> " → " <> show onChainLen <> ", slot " <> show slot <> ")"
+      applyRollupUpdate ctx bs slot rsuNewRollupState rsuDelta
 handleRollForward _ _ _ = pure () -- Ignore non-Conway blocks.
 
--- | Handle a chain rollback by reverting to the last persisted state.
--- This is safe because we only persist state after our own successful batch
--- submissions, so rolling back always returns to a known-good state.
+-- | Handle a chain rollback by restoring from the in-memory state history.
 handleRollback ∷ Ctx → BatcherState → Api.ChainPoint → IO ()
-handleRollback ctx bs _point = do
-  gyLogWarning (ctxProviders ctx) mempty "Chain sync: rollback detected, reloading persisted state"
-  mPersisted ← loadState (ctxDbPath ctx)
-  let (st, utxo) = case mPersisted of
-        Just (PersistedState s u) → (s, u)
-        Nothing → (initialState, initialUtxoPreimage)
-      tree = SymMerkle.fromLeaves (fmap (hHash . hash) utxo)
+handleRollback ctx bs point = do
+  let targetSlot = case point of
+        Api.ChainPointAtGenesis → 0
+        Api.ChainPoint (Api.SlotNo s) _ → s
+  gyLogWarning (ctxProviders ctx) mempty $
+    "Chain sync: rollback to slot " <> show targetSlot
   atomically $ do
-    writeTVar (bsLedgerStateVar bs) st
-    writeTVar (bsUtxoPreimageVar bs) utxo
-    writeTVar (bsMerkleTreeVar bs) tree
-    writeTVar (bsExternalUpdateVar bs) True
- where
-  initialUtxoPreimage = pure (nullUTxO @A @I)
+    history ← readTVar (bsStateHistoryVar bs)
+    -- Find the most recent snapshot at or before the target slot.
+    case dropWhile (\(s, _, _) → s > targetSlot) history of
+      ((_, st, lh) : rest) → do
+        writeTVar (bsLedgerStateVar bs) st
+        writeTVar (bsLeafHashesVar bs) lh
+        writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves lh)
+        writeTVar (bsStateHistoryVar bs) rest
+      [] → do
+        -- No snapshot covers this slot; reset to initial state.
+        let initLH = pure (nullUTxOHash @A @I)
+        writeTVar (bsLedgerStateVar bs) initialState
+        writeTVar (bsLeafHashesVar bs) initLH
+        writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves initLH)
+        writeTVar (bsStateHistoryVar bs) []
 
 -- | Scan a single transaction for a rollup state update.
 -- Returns 'Just' if the transaction produces an output with the rollup NFT.
@@ -208,17 +221,18 @@ findRollupUpdate (GYNonAdaToken nftMP nftTN) (Api.Tx txBody _) =
               }
         _ → Nothing
 
--- | Apply an external state update to the local state.
--- Updates the Merkle tree leaf hashes from the delta, marks affected preimage
--- entries as unknown (nullUTxO), and signals the batcher.
-applyExternalUpdate
+-- | Apply a rollup state update: update leaf hashes from the delta, rebuild
+-- the Merkle tree, and update the State. Saves a snapshot for rollback recovery.
+applyRollupUpdate
   ∷ Ctx
   → BatcherState
+  → Word64
+  -- ^ Slot number of the block containing this update.
   → RollupState
   → [Integer]
-  -- ^ Tree delta (may be empty if redeemer extraction not yet available).
+  -- ^ Tree delta.
   → IO ()
-applyExternalUpdate ctx bs newRollupState delta = do
+applyRollupUpdate ctx bs slot newRollupState delta = do
   let biCount = 1 ∷ Int -- Bi
       txCount = 2 ∷ Int -- TxCount
       nCount = 2 ∷ Int -- N
@@ -231,30 +245,38 @@ applyExternalUpdate ctx bs newRollupState delta = do
           , sLength = fromConstant (chainLength newRollupState)
           }
 
-  -- Apply the external update.
-  -- The delta contains leaf hashes, but the preimage stores full UTxO objects.
-  -- For positions modified by the other aggregator, we set preimage entries to
-  -- nullUTxO (unknown) — the user must provide the full UTxO when spending it.
-  -- We rebuild the tree from the preimage, which gives correct hashes for our
-  -- own known entries and nullUTxOHash for unknown ones.
-  oldPreimage ← readTVarIO (bsUtxoPreimageVar bs)
-  let allPositions = collectModifiedPositions biCount txCount nCount delta
-      newPreimage = markUnknown allPositions oldPreimage
-      newTree = rebuildTreeFromPreimage newPreimage
-  -- Update in-memory state only — do NOT persist to SQLite.
-  -- On rollback, handleRollback calls loadState which must return our last
-  -- known-good state (from our own batch), not an external update.
+  -- Snapshot current state before modifying (for rollback).
+  (currentState, currentLeafHashes) ← atomically $
+    (,) <$> readTVar (bsLedgerStateVar bs) <*> readTVar (bsLeafHashesVar bs)
+
+  -- Extract (position, newHash) from delta and apply to leaf hashes.
+  let modifiedLeaves = collectModifiedLeaves biCount txCount nCount delta
+      newLeafHashes = applyLeafUpdates modifiedLeaves currentLeafHashes
+      newTree = SymMerkle.fromLeaves newLeafHashes
+
+  -- Update TVars and save rollback snapshot.
   atomically $ do
     writeTVar (bsLedgerStateVar bs) newState
-    writeTVar (bsUtxoPreimageVar bs) newPreimage
+    writeTVar (bsLeafHashesVar bs) newLeafHashes
     writeTVar (bsMerkleTreeVar bs) newTree
-    writeTVar (bsExternalUpdateVar bs) True
-  gyLogInfo (ctxProviders ctx) mempty $
-    "Chain sync: external update applied, " <> show (length allPositions) <> " leaf positions marked unknown"
+    -- Maintain state history for rollback (most recent first, cap at 20).
+    history ← readTVar (bsStateHistoryVar bs)
+    writeTVar (bsStateHistoryVar bs) $
+      take 20 ((slot, currentState, currentLeafHashes) : history)
 
--- | Collect all leaf positions that were modified by the delta.
--- Delta structure: [bi*(pos,hash)] ++ [t*n*pos] ++ [t*n*(isActive,pos,hash)]
-collectModifiedPositions
+  -- Persist to SQLite for crash recovery.
+  saveState (ctxDbPath ctx) newState newLeafHashes
+  gyLogInfo (ctxProviders ctx) mempty $
+    "Chain sync: state updated, " <> show (length modifiedLeaves) <> " leaf positions modified"
+
+-- | Extract (position, newLeafHash) pairs from the flat delta list.
+--
+-- Delta structure: @[bi*(pos,hash)] ++ [t*n*pos] ++ [t*n*(isActive,pos,hash)]@
+--
+-- For inputs (consumed positions), the new hash is 'nullUTxOHash'.
+-- For bridge-ins and active outputs, the new hash is given in the delta.
+-- Outputs and bridge-ins override inputs at the same position.
+collectModifiedLeaves
   ∷ Int
   -- ^ Bridge-in count (Bi).
   → Int
@@ -263,42 +285,47 @@ collectModifiedPositions
   -- ^ Inputs/outputs per transaction (N).
   → [Integer]
   -- ^ Flat delta list.
-  → [Integer]
-collectModifiedPositions biCount txCount nCount delta =
-  let (biPart, rest1) = splitAt (biCount * 2) delta
-      (inputPart, rest2) = splitAt (txCount * nCount) rest1
-      outputPart = rest2
-
-      biPositions = everyNth 2 0 biPart
-      inputPositions = inputPart
-      outputPositions = activeOutputPositions outputPart
-   in biPositions <> inputPositions <> outputPositions
+  → [(Integer, FieldElement I)]
+collectModifiedLeaves biCount txCount nCount delta =
+  Map.toList finalMap
  where
-  everyNth _ _ [] = []
-  everyNth n i (x : xs)
-    | i `mod` n == 0 = x : everyNth n (i + 1) xs
-    | otherwise = everyNth n (i + 1) xs
+  (biPart, rest1) = splitAt (biCount * 2) delta
+  (inputPart, rest2) = splitAt (txCount * nCount) rest1
+  outputPart = rest2
 
-  activeOutputPositions [] = []
-  activeOutputPositions (active : pos : _ : rest)
-    | active == 1 = pos : activeOutputPositions rest
-    | otherwise = activeOutputPositions rest
-  activeOutputPositions _ = []
+  nullHash ∷ FieldElement I
+  nullHash = nullUTxOHash @A @I
 
--- | Apply all leaf modifications to a preimage vector, then rebuild the tree.
--- This is more efficient than individual replaceAt calls when applying many changes.
-rebuildTreeFromPreimage ∷ Leaves Ud (UTxO A I) → SymMerkle.MerkleTree Ud I
-rebuildTreeFromPreimage pre = SymMerkle.fromLeaves (fmap (hHash . hash) pre)
+  -- Inputs: consumed positions → nullUTxOHash.
+  inputMap = Map.fromList [(pos, nullHash) | pos ← inputPart]
 
--- | The null UTxO hash as a FieldElement.
-nullUTxOHashFE ∷ FieldElement I
-nullUTxOHashFE = hHash (hash (nullUTxO @A @I))
+  -- Bridge-ins: (pos, hash) pairs.
+  biMap = Map.fromList (pairUpFE biPart)
 
--- | Mark preimage entries at given positions as unknown (nullUTxO).
-markUnknown ∷ [Integer] → Leaves Ud (UTxO A I) → Leaves Ud (UTxO A I)
-markUnknown positions preimage =
-  let lst = fromVector preimage
-      updated = foldr (\pos pre → replaceNth (fromInteger pos) (nullUTxO @A @I) pre) lst positions
+  -- Active outputs: (isActive, pos, hash) triples → (pos, hash) for active.
+  outMap = Map.fromList (activeOutputLeaves outputPart)
+
+  -- Outputs override bridge-ins override inputs.
+  finalMap = outMap `Map.union` biMap `Map.union` inputMap
+
+  pairUpFE ∷ [Integer] → [(Integer, FieldElement I)]
+  pairUpFE (pos : h : rest) = (pos, fromConstant h) : pairUpFE rest
+  pairUpFE _ = []
+
+  activeOutputLeaves ∷ [Integer] → [(Integer, FieldElement I)]
+  activeOutputLeaves (active : pos : h : rest)
+    | active == 1 = (pos, fromConstant h) : activeOutputLeaves rest
+    | otherwise = activeOutputLeaves rest
+  activeOutputLeaves _ = []
+
+-- | Apply leaf hash updates to the leaf hash vector.
+applyLeafUpdates
+  ∷ [(Integer, FieldElement I)]
+  → Leaves Ud (FieldElement I)
+  → Leaves Ud (FieldElement I)
+applyLeafUpdates updates leafHashes =
+  let lst = fromVector leafHashes
+      updated = foldr (\(pos, h) lh → replaceNth (fromInteger pos) h lh) lst updates
    in unsafeToVector updated
 
 -- | Replace the element at index n in a list.

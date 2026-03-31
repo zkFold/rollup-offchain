@@ -24,6 +24,7 @@ import ZkFold.Symbolic.Ledger.Circuit.Compile (
   ledgerSetup,
   mkSetup,
  )
+import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Ledger.Types (nullUTxO)
 
 main ∷ IO ()
@@ -132,10 +133,10 @@ runCommand RollupSeedCommand {..} = do
 
     writeRollupConfig nid rscOutput initializedBuildInfo
 
-    let initialUtxoPreimage = pure (nullUTxO @A @I)
+    let initialLeafHashes = fmap (hHash . hash) (pure (nullUTxO @A @I))
     createDirectoryIfMissing True (takeDirectory rscStateFile)
     initDb rscStateFile
-    saveState rscStateFile state0 initialUtxoPreimage
+    saveState rscStateFile state0 initialLeafHashes
     Prelude.putStrLn $ "Initial state written to: " <> rscStateFile
 
 writeRollupConfig ∷ GYNetworkId → FilePath → ZKInitializedRollupBuildInfo → IO ()
