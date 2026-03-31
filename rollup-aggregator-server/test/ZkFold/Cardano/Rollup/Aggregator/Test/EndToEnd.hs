@@ -2,6 +2,8 @@
 
 module ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd (endToEndTests) where
 
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.Reader (runReaderT)
 import Data.Aeson qualified as Aeson
 -- import Data.ByteString (ByteString)
@@ -41,7 +43,8 @@ import GeniusYield.Types (
 import System.Directory (removePathForcibly)
 import Test.Tasty (TestTree, testGroup, withResource)
 import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCaseSteps)
-import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, processBatch)
+import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initBatcherState, processBatch)
+import ZkFold.Cardano.Rollup.Aggregator.ChainSync (startChainSync)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx qualified as AggCtx
 import ZkFold.Cardano.Rollup.Aggregator.Handlers (
@@ -73,13 +76,13 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   TxsByAddressResponse (..),
  )
 import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
-import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
+import ZkFold.Cardano.Rollup.Api.Utils (feToInteger, stateToRollupState)
 import ZkFold.Data.Vector (fromVector)
 -- import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup, ledgerCircuit)
 import ZkFold.Algebra.Class (Zero (zero))
 import ZkFold.Symbolic.Data.Hash (Hash (hHash))
 import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
-import ZkFold.Symbolic.Ledger.Types (Output (..), OutputRef (..), Transaction (..), UTxO (..), txId)
+import ZkFold.Symbolic.Ledger.Types (Output (..), OutputRef (..), State (..), Transaction (..), UTxO (..), txId)
 -- import ZkFold.Protocol.NonInteractiveProof.TrustedSetup (powersOfTauSubset)
 
 endToEndTests ∷ Setup → TestTree
@@ -153,6 +156,9 @@ endToEndTests setup =
                     , AggCtx.ctxNodeSocketPath = nodeSocket
                     }
 
+            -- Start ChainSync so the Merkle tree and state are maintained.
+            _chainSyncAsync ← startChainSync aggCtx batcherState nodeSocket
+
             -- Step 4: Bridge-in via handleBridgeIn (10 ADA + 50 asset2)
             let bridgeInValue = valueFromLovelace 10_000_000 <> fakeValue asset2 50_000_000
                 birReq =
@@ -223,6 +229,10 @@ endToEndTests setup =
                 let (ids, txs) = unzip pairs
                 tid ← processBatch aggCtx batcherState ids txs
                 info $ "Batch submitted: " <> show tid
+
+            -- Wait for ChainSync to process the block and update state.
+            waitForChainSync' batcherState 1
+            info "ChainSync confirmed batch 1"
 
             -- Indexing: after batch 1 — no pending txs; 1 batch containing 2 txs; tx1+tx2 are batched;
             -- Ex3.address2 has transaction history
@@ -310,6 +320,10 @@ endToEndTests setup =
                 tid ← processBatch aggCtx batcherState ids2 txs2
                 info $ "Batch submitted: " <> show tid
 
+            -- Wait for ChainSync to process the block and update state.
+            waitForChainSync' batcherState 2
+            info "ChainSync confirmed batch 2"
+
             -- Indexing: after batch 2 — no pending txs; 2 batches total; batch 2 contains 2 txs;
             -- bridge-out (from tx3) is now batched; Ex3.address has accumulated tx history
             PendingTxsResponse {ptrTxs = ptxsAfterB2} ← handlePendingTxs aggCtx
@@ -341,3 +355,16 @@ endToEndTests setup =
 
             info "End-to-end test passed"
         ]
+
+-- | Wait for ChainSync to advance the rollup state to at least the expected chain length.
+-- Polls the state TVar every second, up to 120 retries (2 minutes).
+waitForChainSync' ∷ BatcherState → Integer → IO ()
+waitForChainSync' bs expectedLen = go (120 ∷ Int)
+ where
+  go 0 = assertFailure $ "Timed out waiting for ChainSync to reach chain length " <> show expectedLen
+  go n = do
+    st ← readTVarIO (bsLedgerStateVar bs)
+    let currentLen = feToInteger (sLength st)
+    if currentLen >= expectedLen
+      then pure ()
+      else threadDelay 1_000_000 >> go (n - 1)

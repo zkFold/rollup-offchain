@@ -413,11 +413,15 @@ constructPreimage dbPath leafHashes = do
 processBatch ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
 processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
   -- Read current state from ChainSync-maintained TVars.
-  (prevState, prevLeafHashes, prevTree) ←
-    atomically $
-      (,,) <$> readTVar bsLedgerStateVar <*> readTVar bsLeafHashesVar <*> readTVar bsMerkleTreeVar
-  -- Construct preimage from leaf hashes + preimage DB.
+  prevState ← readTVarIO bsLedgerStateVar
+  prevLeafHashes ← readTVarIO bsLeafHashesVar
+  -- Construct preimage from leaf hashes + preimage DB, then rebuild the tree
+  -- from the preimage to guarantee tree ↔ preimage consistency. ChainSync's
+  -- delta-reconstructed tree may diverge (e.g. null input positions in the
+  -- delta are meaningless but can corrupt the tree), so we always derive the
+  -- tree from the preimage as the single source of truth for proof generation.
   prevUtxoPreimage ← constructPreimage ctxDbPath prevLeafHashes
+  let prevTree = SymMerkle.fromLeaves (fmap (hHash . hash) prevUtxoPreimage)
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
       batch = TransactionBatch {tbTransactions = unsafeToVector' (map qtTransaction queuedTxs)}

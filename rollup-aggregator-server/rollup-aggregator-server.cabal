@@ -134,6 +134,7 @@ test-suite rollup-aggregator-server-tests
     plutus-tx,
     rollup-aggregator-server,
     rollup-offchain-cardano-api,
+    stm,
     symbolic-base,
     symbolic-ledger,
     tasty,
