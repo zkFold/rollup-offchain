@@ -250,7 +250,9 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
     (,) <$> readTVar (bsLedgerStateVar bs) <*> readTVar (bsLeafHashesVar bs)
 
   -- Extract (position, newHash) from delta and apply to leaf hashes.
-  let modifiedLeaves = collectModifiedLeaves biCount txCount nCount delta
+  -- Pass the current leaf hashes so that null/padding input positions
+  -- (which point at already-null leaves) can be filtered out.
+  let modifiedLeaves = collectModifiedLeaves biCount txCount nCount currentLeafHashes delta
       newLeafHashes = applyLeafUpdates modifiedLeaves currentLeafHashes
       newTree = SymMerkle.fromLeaves newLeafHashes
 
@@ -264,19 +266,6 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
     writeTVar (bsStateHistoryVar bs) $
       take 20 ((slot, currentState, currentLeafHashes) : history)
 
-  -- Verify tree root matches on-chain root. A mismatch indicates the delta
-  -- application is imprecise (e.g. null input positions in the delta don't
-  -- correspond to real Merkle tree changes). The Batcher handles this by
-  -- rebuilding the tree from the preimage DB, so a mismatch here is not fatal
-  -- but is logged for diagnostics.
-  let computedRoot = feToInteger (SymMerkle.mHash newTree)
-      expectedRoot = utxoTreeRoot newRollupState
-  when (computedRoot /= expectedRoot) $
-    gyLogWarning (ctxProviders ctx) mempty $
-      "Chain sync: tree root mismatch after delta (computed=" <> show computedRoot
-        <> ", on-chain=" <> show expectedRoot
-        <> "). Batcher will rebuild tree from preimage DB."
-
   -- Persist to SQLite for crash recovery.
   saveState (ctxDbPath ctx) newState newLeafHashes
   gyLogInfo (ctxProviders ctx) mempty $
@@ -289,6 +278,11 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
 -- For inputs (consumed positions), the new hash is 'nullUTxOHash'.
 -- For bridge-ins and active outputs, the new hash is given in the delta.
 -- Outputs and bridge-ins override inputs at the same position.
+--
+-- Null\/padding inputs (from 'nullOutputRef') have meaningless positions in
+-- the delta — the circuit ignores them, so we must too. We detect them by
+-- checking: a real consumed input always occupies a non-null leaf, while a
+-- null input points at an already-null leaf.
 collectModifiedLeaves
   ∷ Int
   -- ^ Bridge-in count (Bi).
@@ -296,10 +290,12 @@ collectModifiedLeaves
   -- ^ Transaction count (TxCount).
   → Int
   -- ^ Inputs/outputs per transaction (N).
+  → Leaves Ud (FieldElement I)
+  -- ^ Current leaf hashes (for filtering null input positions).
   → [Integer]
   -- ^ Flat delta list.
   → [(Integer, FieldElement I)]
-collectModifiedLeaves biCount txCount nCount delta =
+collectModifiedLeaves biCount txCount nCount currentLeafHashes delta =
   Map.toList finalMap
  where
   (biPart, rest1) = splitAt (biCount * 2) delta
@@ -309,8 +305,23 @@ collectModifiedLeaves biCount txCount nCount delta =
   nullHash ∷ FieldElement I
   nullHash = nullUTxOHash @A @I
 
-  -- Inputs: consumed positions → nullUTxOHash.
-  inputMap = Map.fromList [(pos, nullHash) | pos ← inputPart]
+  currentHashes = fromVector currentLeafHashes
+
+  -- Helper: look up the current hash at a given position.
+  hashAt ∷ Integer → FieldElement I
+  hashAt pos
+    | pos >= 0 && pos < fromIntegral (length currentHashes) =
+        currentHashes !! fromInteger pos
+    | otherwise = nullHash
+
+  -- Inputs: consumed positions → nullUTxOHash, but ONLY if the position
+  -- currently holds a non-null leaf (i.e. a real UTxO being consumed).
+  -- Positions that are already null are from padding inputs and must be skipped.
+  inputMap = Map.fromList
+    [ (pos, nullHash)
+    | pos ← inputPart
+    , hashAt pos /= nullHash
+    ]
 
   -- Bridge-ins: (pos, hash) pairs.
   biMap = Map.fromList (pairUpFE biPart)
