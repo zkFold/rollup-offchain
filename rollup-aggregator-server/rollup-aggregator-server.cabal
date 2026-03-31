@@ -127,6 +127,7 @@ test-suite rollup-aggregator-server-tests
     atlas-cardano,
     base,
     bytestring,
+    cardano-api,
     directory,
     mtl,
     plutus-ledger-api,
