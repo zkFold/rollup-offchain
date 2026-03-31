@@ -113,9 +113,20 @@ import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 -- | In-process mutable state and cryptographic material for the batcher.
 --
--- The Merkle tree and state TVars are owned by ChainSync (single writer).
--- The Batcher reads them to compute batches and communicates preimage data
--- via the @utxo_preimages@ SQLite table.
+-- Two sets of TVars are maintained with distinct ownership:
+--
+-- __ChainSync-owned__ ('bsLedgerStateVar', 'bsLeafHashesVar', 'bsMerkleTreeVar'):
+--   Reflect the on-chain state as seen by ChainSync.  Used for external-update
+--   detection, rollback recovery, and query endpoints.  The 'State' stored here
+--   goes through an Integer round-trip (@fromConstant . feToInteger@) when read
+--   from the on-chain datum, so its 'sUTxO' may differ from the original
+--   'FieldElement'.
+--
+-- __Batcher-owned__ ('bsBatcherStateVar', 'bsUtxoPreimageVar'):
+--   Maintained directly from 'updateLedgerState' output — no round-trip.
+--   The state and preimage are guaranteed mutually consistent
+--   (@sUTxO == mHash(fromLeaves(fmap (hHash . hash) preimage))@) and are
+--   the ONLY values used for ZK proof generation.
 data BatcherState = BatcherState
   { bsLedgerStateVar ∷ !(TVar (State I))
   -- ^ Rollup state. Written by ChainSync only.
@@ -123,6 +134,15 @@ data BatcherState = BatcherState
   -- ^ Merkle tree leaf hashes. Written by ChainSync only.
   , bsMerkleTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
   -- ^ Merkle tree derived from leaf hashes. Written by ChainSync only.
+  , bsBatcherStateVar ∷ !(TVar (State I))
+  -- ^ Batcher's own copy of the rollup state (from 'updateLedgerState').
+  -- Guaranteed consistent with 'bsBatcherTreeVar' and 'bsUtxoPreimageVar'.
+  -- Written by Batcher only.
+  , bsBatcherTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
+  -- ^ Batcher's own tree (from 'updateLedgerState'). Written by Batcher only.
+  , bsUtxoPreimageVar ∷ !(TVar (Leaves Ud (UTxO A I)))
+  -- ^ UTxO preimage vector. Written by Batcher after each successful batch.
+  -- Guaranteed hash-consistent with 'bsBatcherStateVar' (no round-trip).
   , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
   , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A S N TxCount)
   , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
@@ -141,14 +161,21 @@ initBatcherState dbPath = do
         Just (PersistedState st lh) → (st, lh)
         Nothing → (initialState, initialLeafHashes)
       initTree = SymMerkle.fromLeaves initLH
+  -- On startup, construct the initial preimage from the preimage DB.
+  -- This is the one place where JSON-deserialized UTxOs are used.
+  -- After the first batch, the in-memory preimage is always fresh.
+  initPreimage ← constructPreimage dbPath initLH
   stateVar ← newTVarIO initSt
   leafHashesVar ← newTVarIO initLH
   treeVar ← newTVarIO initTree
+  batcherStateVar ← newTVarIO initSt
+  batcherTreeVar ← newTVarIO initTree
+  preimageVar ← newTVarIO initPreimage
   historyVar ← newTVarIO []
   ts ← powersOfTauSubset
   let circuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
-  pure $ BatcherState stateVar leafHashesVar treeVar ts circuit proverSecret historyVar
+  pure $ BatcherState stateVar leafHashesVar treeVar batcherStateVar batcherTreeVar preimageVar ts circuit proverSecret historyVar
 
 initialLeafHashes ∷ Leaves Ud (FieldElement I)
 initialLeafHashes = pure (nullUTxOHash @A @I)
@@ -316,20 +343,23 @@ nullQueuedTx =
 -- * there are pending bridge-ins on L1 (remaining slots are padded with null txs).
 startBatcher ∷ Ctx → BatcherState → IO ()
 startBatcher ctx@Ctx {..} bs = do
-  lastLenRef ← readTVarIO (bsLedgerStateVar bs) >>= newTVarIO . feToInteger . sLength
+  -- Track ChainSync's chain length to detect external updates and for waitForChainSync.
+  lastChainSyncLenRef ← readTVarIO (bsLedgerStateVar bs) >>= newTVarIO . feToInteger . sLength
   forever $ do
     let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
     threadDelay delayMicros
     -- Detect state changes from ChainSync (external updates or rollbacks).
+    -- bsLedgerStateVar is written ONLY by ChainSync, so changes indicate
+    -- on-chain state updates.
     currentLen ← feToInteger . sLength <$> readTVarIO (bsLedgerStateVar bs)
-    prevLen ← readTVarIO lastLenRef
+    prevLen ← readTVarIO lastChainSyncLenRef
     when (currentLen /= prevLen) $ do
       gyLogInfo ctxProviders mempty $
-        "State changed (len " <> show prevLen <> " → " <> show currentLen
+        "ChainSync state changed (len " <> show prevLen <> " → " <> show currentLen
           <> "), revalidating pending txs"
       revertProcessingTxsDb ctxDbPath
       revalidatePendingTxs ctx bs
-      atomically $ writeTVar lastLenRef currentLen
+      atomically $ writeTVar lastChainSyncLenRef currentLen
     -- Process batches.
     bridgeInData ← queryBridgeIns ctx
     if not (null bridgeInData)
@@ -340,12 +370,12 @@ startBatcher ctx@Ctx {..} bs = do
         available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
         let (ids, qtxs) = unzip available
             padded = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
-        processBatchWithLogging ctx bs ids padded lastLenRef
+        processBatchWithLogging ctx bs ids padded lastChainSyncLenRef
       else do
         mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
         for_ mQueued $ \pairs →
           let (ids, qtxs) = unzip pairs
-           in processBatchWithLogging ctx bs ids qtxs lastLenRef
+           in processBatchWithLogging ctx bs ids qtxs lastChainSyncLenRef
 
 processBatchWithLogging ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → TVar Integer → IO ()
 processBatchWithLogging ctx@Ctx {..} bs ids queued lastLenRef =
@@ -370,11 +400,11 @@ processBatchWithLogging ctx@Ctx {..} bs ids queued lastLenRef =
     gyLogError ctxProviders mempty $
       "Batch processing failed (" <> label <> "): " <> displayException err
 
--- | Wait for ChainSync to advance the state after a successful batch submission.
--- Times out after 120 seconds to avoid blocking indefinitely.
+-- | Wait for ChainSync to process the block by watching ChainSync's own
+-- state TVar (which only ChainSync writes to). Times out after 120 seconds.
 waitForChainSync ∷ Ctx → BatcherState → TVar Integer → IO ()
-waitForChainSync Ctx {..} BatcherState {..} lastLenRef = do
-  prevLen ← readTVarIO lastLenRef
+waitForChainSync Ctx {..} BatcherState {..} lastChainSyncLenRef = do
+  prevLen ← readTVarIO lastChainSyncLenRef
   gyLogInfo ctxProviders mempty "Waiting for ChainSync to confirm state update..."
   mResult ← timeout 120_000_000 $ atomically $ do
     st ← readTVar bsLedgerStateVar
@@ -385,7 +415,7 @@ waitForChainSync Ctx {..} BatcherState {..} lastLenRef = do
       "Timed out waiting for ChainSync (120s). Proceeding."
     Just () → do
       newLen ← feToInteger . sLength <$> readTVarIO bsLedgerStateVar
-      atomically $ writeTVar lastLenRef newLen
+      atomically $ writeTVar lastChainSyncLenRef newLen
       gyLogInfo ctxProviders mempty "ChainSync confirmed state update"
 
 -- | Construct the UTxO preimage vector by looking up leaf hashes in the preimage DB.
@@ -397,12 +427,16 @@ constructPreimage ∷ FilePath → Leaves Ud (FieldElement I) → IO (Leaves Ud 
 constructPreimage dbPath leafHashes = do
   let nullHash = nullUTxOHash @A @I
       hashList = fromVector leafHashes
-      nonNullHashTexts =
-        [ decodeUtf8 . toStrict . encode $ h
-        | h ← hashList
-        , h /= nullHash
-        ]
+      nonNullHashes = filter (/= nullHash) hashList
+      nonNullHashTexts = map (decodeUtf8 . toStrict . encode) nonNullHashes
   preimageMap ← lookupPreimagesDb dbPath nonNullHashTexts
+  let missed = length nonNullHashes - Map.size preimageMap
+  when (missed > 0) $
+    -- This indicates a key mismatch between what ChainSync stored
+    -- (from delta) and what the Batcher stored (from updateLedgerState).
+    putStrLn $
+      "constructPreimage: " <> show missed <> " of " <> show (length nonNullHashes)
+        <> " non-null leaf hashes NOT found in preimage DB"
   pure $ fmap (\h →
     if h == nullHash
       then nullUTxO @A @I
@@ -412,22 +446,20 @@ constructPreimage dbPath leafHashes = do
 
 processBatch ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
 processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
-  -- Read current state from ChainSync-maintained TVars.
-  prevState ← readTVarIO bsLedgerStateVar
-  prevLeafHashes ← readTVarIO bsLeafHashesVar
-  -- Construct preimage from leaf hashes + preimage DB, then rebuild the tree
-  -- from the preimage to guarantee tree ↔ preimage consistency. ChainSync's
-  -- delta-reconstructed tree may diverge (e.g. null input positions in the
-  -- delta are meaningless but can corrupt the tree), so we always derive the
-  -- tree from the preimage as the single source of truth for proof generation.
-  prevUtxoPreimage ← constructPreimage ctxDbPath prevLeafHashes
-  let prevTree = SymMerkle.fromLeaves (fmap (hHash . hash) prevUtxoPreimage)
+  -- Read state and preimage from the Batcher-owned TVars (NOT ChainSync's).
+  -- Both originate from the same updateLedgerState call, guaranteeing
+  -- sUTxO == mHash(tree). ChainSync's state goes through an Integer
+  -- round-trip that can change the FieldElement, so it must not be used
+  -- for proof generation.
+  (prevState, prevTree, prevUtxoPreimage) ←
+    atomically $
+      (,,) <$> readTVar bsBatcherStateVar <*> readTVar bsBatcherTreeVar <*> readTVar bsUtxoPreimageVar
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
       batch = TransactionBatch {tbTransactions = unsafeToVector' (map qtTransaction queuedTxs)}
       sigMaterial = Comp1 (unsafeToVector' (map qtSignatures queuedTxs))
       allBridgeOuts = concatMap qtBridgeOuts queuedTxs
-      newState :*: witness :*: _newTree :*: preimageWrapped =
+      newState :*: witness :*: newTree :*: preimageWrapped =
         updateLedgerState prevState prevTree prevUtxoPreimage bridgedIn batch sigMaterial
       newPreimage = unComp1 preimageWrapped
       lci =
@@ -474,6 +506,12 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus delta) ctxRollupBuildInfo
         body ← buildTxBody skel
         signAndSubmitConfirmed body
-  -- ChainSync will update TVars when it sees the block on-chain.
+  -- Update the Batcher-owned state and preimage. These are separate from
+  -- ChainSync's TVars, so no race condition.
+  atomically $ do
+    writeTVar bsBatcherStateVar newState
+    writeTVar bsBatcherTreeVar newTree
+    writeTVar bsUtxoPreimageVar newPreimage
+  -- ChainSync will independently update its own TVars when it sees the block.
   recordBatchDb ctxDbPath ids (Text.pack (show submittedTxId))
   pure submittedTxId
