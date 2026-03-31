@@ -81,7 +81,6 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   revertProcessingTxsDb,
   revertTxsDb,
   savePreimagesDb,
-  saveState,
   seedPreimageDbFromOldState,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types
@@ -353,10 +352,8 @@ processBatchWithLogging ctx@Ctx {..} bs ids queued lastLenRef =
   ( do
       tid ← processBatch ctx bs ids queued
       gyLogInfo ctxProviders mempty $ "Batch submitted: " <> show tid
-      -- Wait for ChainSync to process the block (if running).
-      case ctxNodeSocketPath of
-        Just _ → waitForChainSync ctx bs lastLenRef
-        Nothing → pure ()
+      -- Wait for ChainSync to process the block.
+      waitForChainSync ctx bs lastLenRef
   )
     `catches` [ Handler (\(err ∷ GYTxMonadException) → revert >> logException "GYTxMonadException" err)
               , Handler (\(err ∷ SubmitTxException) → revert >> logException "SubmitTxException" err)
@@ -473,16 +470,6 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus delta) ctxRollupBuildInfo
         body ← buildTxBody skel
         signAndSubmitConfirmed body
-  -- In single-aggregator mode (no ChainSync), update state directly.
-  case ctxNodeSocketPath of
-    Nothing → do
-      let newLeafHashes = fmap (hHash . hash) newPreimage
-          newTree = SymMerkle.fromLeaves newLeafHashes
-      atomically $ do
-        writeTVar bsLedgerStateVar newState
-        writeTVar bsLeafHashesVar newLeafHashes
-        writeTVar bsMerkleTreeVar newTree
-      saveState ctxDbPath newState newLeafHashes
-    Just _ → pure () -- ChainSync will update TVars when it sees the block.
+  -- ChainSync will update TVars when it sees the block on-chain.
   recordBatchDb ctxDbPath ids (Text.pack (show submittedTxId))
   pure submittedTxId

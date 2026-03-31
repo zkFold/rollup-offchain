@@ -12,7 +12,9 @@ import Data.Maybe (fromMaybe)
 import GHC.Generics ((:.:) (..), type (:*:) (..))
 import GHC.TypeNats (natVal)
 import GeniusYield.Test.FakeCoin (FakeCoin (..), fakePolicy, fakeValue)
+import Cardano.Api qualified as Api
 import GeniusYield.Test.Privnet.Ctx (
+  Ctx (ctxInfo),
   ctxNetworkId,
   ctxProviders,
   ctxRun,
@@ -135,6 +137,8 @@ endToEndTests setup =
             -- Step 3: Create aggregator Ctx
             let nid = ctxNetworkId privCtx
                 providers = ctxProviders privCtx
+                -- Extract the node socket path from the privnet's LocalNodeConnectInfo.
+                Api.LocalNodeConnectInfo {Api.localNodeSocketPath = Api.File nodeSocket} = ctxInfo privCtx
             userUtxos ← ctxRunQuery privCtx $ utxosAtAddress (userAddr fundUser) Nothing
             let collateralRef = utxoRef $ head $ utxosToList userUtxos
                 aggCtx =
@@ -146,7 +150,7 @@ endToEndTests setup =
                     , AggCtx.ctxRollupBuildInfo = buildInfo
                     , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
                     , AggCtx.ctxDbPath = dbPath
-                    , AggCtx.ctxNodeSocketPath = Nothing
+                    , AggCtx.ctxNodeSocketPath = nodeSocket
                     }
 
             -- Step 4: Bridge-in via handleBridgeIn (10 ADA + 50 asset2)

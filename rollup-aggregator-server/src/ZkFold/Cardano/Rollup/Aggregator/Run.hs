@@ -168,12 +168,8 @@ runBatcher mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
   let logInfoS = gyLogInfo (ctxProviders ctx) mempty
   logConfig "Batcher" logInfoS ctx serverConfig
   batcherState ← initBatcherState (ctxDbPath ctx)
-  -- Start chain sync in background if node socket path is configured.
-  case ctxNodeSocketPath ctx of
-    Just socketPath → do
-      logInfoS $ "Starting chain sync client (socket: " <> socketPath <> ")"
-      _chainSyncAsync ← startChainSync ctx batcherState socketPath
-      pure ()
-    Nothing →
-      logInfoS "No node socket path configured; chain sync disabled (single-aggregator mode)"
+  -- Start chain sync in background.
+  let socketPath = ctxNodeSocketPath ctx
+  logInfoS $ "Starting chain sync client (socket: " <> socketPath <> ")"
+  _chainSyncAsync ← startChainSync ctx batcherState socketPath
   startBatcher ctx batcherState
