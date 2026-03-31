@@ -23,6 +23,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
 ) where
 
 import Control.Exception (throwIO)
+import Data.Aeson qualified
 import Data.Aeson (encode)
 import Data.Bifunctor (Bifunctor (..))
 import Data.ByteString.Lazy (toStrict)
@@ -61,6 +62,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Ctx (
   Ctx (..),
   runSkeletonI,
  )
+import Data.Map.Strict qualified as Map
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   PersistedState (..),
   getBatchByIdDb,
@@ -70,6 +72,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   getTxByHashDb,
   getTxsByAddressDb,
   loadState,
+  lookupPreimagesDb,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types (
   BatchDetailResponse (..),
@@ -95,6 +98,15 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   TxsByAddressResponse (..),
   txParameters,
  )
+import ZkFold.Cardano.Rollup.Api
+import ZkFold.Data.Vector (fromVector)
+import ZkFold.Symbolic.Data.Bool (fromBool)
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
+import ZkFold.Cardano.Rollup.Aggregator.Types (A, Ud)
+import ZkFold.Symbolic.Ledger.Types (nullUTxOHash)
+import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..), UTxO (..))
+import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
 
 -- | Server implementation for the aggregator API.
 aggregatorServer ∷ Ctx → ServerT AggregatorAPI IO
@@ -202,12 +214,23 @@ handleStateInfo ctx = do
   pure $ StateInfoResponse (fmap psLedgerState mState)
 
 -- | Handle L2 UTxO query by address.
+-- Loads the persisted leaf hashes and looks up preimages from the preimage DB,
+-- then filters for UTxOs matching the requested L2 address.
 handleQueryL2Utxos ∷ Ctx → FieldElement RollupBFInterpreter → IO QueryL2UtxosResponse
 handleQueryL2Utxos ctx l2Addr = do
   mState ← loadState (ctxDbPath ctx)
   case mState of
     Nothing → pure $ QueryL2UtxosResponse []
-    Just ps → pure $ QueryL2UtxosResponse (utxosAtL2Address l2Addr (psUtxoPreimage ps))
+    Just (PersistedState _ leafHashes) → do
+      let nullHash = nullUTxOHash @A @I
+          nonNullHashTexts =
+            [ decodeUtf8 . toStrict . Data.Aeson.encode $ h
+            | h ← fromVector leafHashes
+            , h /= nullHash
+            ]
+      preimageMap ← lookupPreimagesDb (ctxDbPath ctx) nonNullHashTexts
+      let matching = filter (\utxo → oAddress (uOutput utxo) == l2Addr) (Map.elems preimageMap)
+      pure $ QueryL2UtxosResponse matching
 
 -- | Handle single transaction lookup by hash.
 handleGetTx ∷ Ctx → Text → IO TxResponse
