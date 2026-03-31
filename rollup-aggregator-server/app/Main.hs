@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Options.Applicative
+
 import ZkFold.Cardano.Rollup.Aggregator.Options
 
 main ∷ IO ()

@@ -82,7 +82,7 @@ type BridgeInAPI =
     :> Post '[JSON] BridgeInResponse
 
 type ConvertAddressAPI =
-  Summary "Convert Cardano address into a dummy L2 address"
+  Summary "Obtain Symbolic representation of a Cardano address"
     :> Description
          "In bridge-out transactions, the L2 address in the transaction outputs must be obtained from \
          \an L1 Cardano address using this endpoint. \
@@ -122,8 +122,8 @@ type SubmitL1TxAPI =
 type StateInfoAPI =
   Summary "Get rollup state info"
     :> Description
-        "Return the current persisted rollup state (chain length, UTxO tree root, etc.), \
-        \or null if the rollup has not been seeded yet."
+         "Return the current persisted rollup state (chain length, UTxO tree root, etc.), \
+         \or null if the rollup has not been seeded yet."
     :> "state"
     :> Get '[JSON] StateInfoResponse
 

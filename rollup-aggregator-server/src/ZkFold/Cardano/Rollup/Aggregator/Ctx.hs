@@ -34,8 +34,9 @@ import GeniusYield.Types (
   gyLogInfo,
   gyLogWarning,
  )
-import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo)
+
+import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig)
 
 -- | Server context containing shared configuration for both the server and batcher.
 data Ctx = Ctx

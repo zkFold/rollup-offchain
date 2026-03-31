@@ -51,10 +51,9 @@ import ZkFold.Cardano.Rollup.Api
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.Bool (fromBool)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Data.Hash (Hashable (..))
+import ZkFold.Symbolic.Data.Hash (hHash)
+import ZkFold.Symbolic.Ledger.Types
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
-import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..))
-import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
 
 import ZkFold.Cardano.Rollup.Aggregator.Api (AggregatorAPI)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (enqueueTx)
@@ -154,7 +153,7 @@ handleSubmitTx ctx SubmitTxRequest {..} = do
 handleTxHash ∷ Ctx → TxHashRequest → IO TxHashResponse
 handleTxHash _ctx TxHashRequest {..} = pure $ TxHashResponse {..}
  where
-  thrHash = hasher thrTransaction
+  thrHash = hHash . txId $ thrTransaction
 
 handleTxParameters ∷ Ctx → IO TxParametersResponse
 handleTxParameters _ctx = pure txParameters
@@ -193,8 +192,8 @@ handleBridgeIn ctx BridgeInRequest {..} = do
 handleSubmitL1Tx ∷ Ctx → SubmitL1TxRequest → IO SubmitL1TxResponse
 handleSubmitL1Tx ctx SubmitL1TxRequest {..} = do
   let txWithWitness = appendWitnessGYTx sl1trWitness sl1trTransaction
-  txId ← gySubmitTx (ctxProviders ctx) txWithWitness
-  pure $ SubmitL1TxResponse txId
+  submittedTxId ← gySubmitTx (ctxProviders ctx) txWithWitness
+  pure $ SubmitL1TxResponse submittedTxId
 
 -- | Handle rollup state info query.
 handleStateInfo ∷ Ctx → IO StateInfoResponse

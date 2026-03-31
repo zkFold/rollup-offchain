@@ -31,10 +31,11 @@ import Database.SQLite.Simple
 import Deriving.Aeson
 import GHC.Natural (Natural)
 import GeniusYield.Types (GYAddress, LowerFirst)
-import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Symbolic.Data.Hash (hHash)
 import ZkFold.Symbolic.Ledger.Types
+
+import ZkFold.Cardano.Rollup.Aggregator.Types
 
 -- | State persisted to the SQLite database across restarts.
 data PersistedState = PersistedState
@@ -330,11 +331,9 @@ loadState dbPath = withConn dbPath $ \conn → do
     query_ conn "SELECT ledger_state, utxo_preimage FROM ledger_state WHERE id = 1"
   case rows of
     [(stText, utxoText)] →
-      case
-        ( eitherDecodeStrict (encodeUtf8 stText)
-        , eitherDecodeStrict (encodeUtf8 utxoText)
-        )
-        of
-          (Right st, Right utxo) → return (Just (PersistedState st utxo))
-          _ → return Nothing
+      case ( eitherDecodeStrict (encodeUtf8 stText)
+           , eitherDecodeStrict (encodeUtf8 utxoText)
+           ) of
+        (Right st, Right utxo) → return (Just (PersistedState st utxo))
+        _ → return Nothing
     _ → return Nothing
