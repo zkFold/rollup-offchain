@@ -6,9 +6,11 @@ module ZkFold.Cardano.Rollup.Api.Utils (
 
 import Data.Function (($), (&))
 import Data.Functor (fmap)
+import Data.List (iterate, zip3)
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeNats (KnownNat, type (-))
-import ZkFold.Algebra.Class (FromConstant (..), PrimeField (..), ToConstant (..))
+import ZkFold.Algebra.Class (FromConstant (..), PrimeField (..), ToConstant (..), one, zero)
+import qualified ZkFold.Algebra.Class as Algebra
 import ZkFold.Cardano.UPLC.RollupSimple.Types
 import ZkFold.Data.MerkleTree (MerkleTreeSize)
 import ZkFold.Data.Vector (Vector, fromVector)
@@ -42,7 +44,7 @@ stateToRollupState State {..} =
 
 -- | Extract the tree delta from the state witness and transaction data.
 -- Produces a flat list of integers matching the circuit's public output order:
---   [bi*(pos,hash)] ++ [t*n*pos] ++ [t*n*(isActive,pos,hash)]
+--   [bi*(isActive,pos,hash)] ++ [t*n*pos] ++ [t*n*(isActive,pos,hash)]
 computeDelta
   ∷ ∀ bi bo ud a s n t
    . ( Symbolic RollupBFInterpreter
@@ -61,17 +63,26 @@ computeDelta witness batch bridgedIn newSt =
     fe ∷ FieldElement RollupBFInterpreter → Integer
     fe = feToInteger
 
-    -- Bridge-in delta: (packedPosition, newHash) per bridge-in
+    -- Bridge-in delta: (isActive, packedPosition, newHash) per bridge-in
+    -- NOTE: orIndex must use symbolic zero/one arithmetic (matching
+    -- updateLedgerState) instead of fromConstant from Integer, because
+    -- UInt's internal register representation can differ between the two
+    -- paths, producing different hashes.
     bridgeInHash = sLength newSt & hash & hHash
+    biOutputsWithIx = zip (fromVector $ unComp1 bridgedIn) (iterate (Algebra.+ one) zero)
     biDelta = concatMap
       (\(entry, (output, ix)) →
-        let pos = packIndex (SymMerkle.position entry)
-            utxo = UTxO {uRef = OutputRef {orTxId = bridgeInHash, orIndex = fromConstant ix}, uOutput = output}
+        let isNull = output == nullOutput
+            isActive = not isNull
+            pos = packIndex (SymMerkle.position entry)
+            utxo = UTxO {uRef = OutputRef {orTxId = bridgeInHash, orIndex = ix}, uOutput = output}
             utxoHash = hash utxo & hHash
-         in [fe pos, fe utxoHash]
+         in [ if isActive then 1 else 0
+            , fe pos
+            , fe utxoHash
+            ]
       )
-      (zip (fromVector $ unComp1 $ swAddBridgeIn witness)
-           (zip (fromVector $ unComp1 bridgedIn) [(0 ∷ Integer) ..]))
+      (zip (fromVector $ unComp1 $ swAddBridgeIn witness) biOutputsWithIx)
 
     -- Input delta: packedPosition per input per transaction
     txWitnesses = fromVector $ unComp1 $ tbwTransactions (swTransactionBatch witness)
@@ -83,6 +94,7 @@ computeDelta witness batch bridgedIn newSt =
       txWitnesses
 
     -- Output delta: (isActive, packedPosition, newHash) per output per transaction
+    -- NOTE: orIndex uses symbolic zero/one arithmetic (matching updateLedgerState).
     txs = fromVector (tbTransactions batch)
     outputDelta = concatMap
       (\(tx, tw) →
@@ -93,7 +105,7 @@ computeDelta witness batch bridgedIn newSt =
                     isNull = output == nullOutput
                     isActive = not isBout && not isNull
                     pos = packIndex (SymMerkle.position entry)
-                    utxo = UTxO {uRef = OutputRef {orTxId = txId', orIndex = fromConstant ix}, uOutput = output}
+                    utxo = UTxO {uRef = OutputRef {orTxId = txId', orIndex = ix}, uOutput = output}
                     utxoHash = hash utxo & hHash
                  in [ if isActive then 1 else 0
                     , fe pos
@@ -102,7 +114,7 @@ computeDelta witness batch bridgedIn newSt =
               )
               (zip3 (fromVector $ unComp1 $ outputs tx)
                     (fromVector $ unComp1 $ twOutputs tw)
-                    [(0 ∷ Integer) ..])
+                    (iterate (Algebra.+ one) zero))
       )
       (zip txs txWitnesses)
    in biDelta <> inputDelta <> outputDelta
