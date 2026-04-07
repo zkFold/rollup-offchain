@@ -21,7 +21,6 @@ import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
 import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
-  LedgerCircuitGates,
   LedgerContractInput (..),
   ledgerCircuit,
   ledgerProof,
@@ -47,7 +46,7 @@ import ZkFold.Symbolic.Ledger.Examples.One (
   newState2,
   prevState,
   witness,
-  witness2,
+  witness2, G,
  )
 
 lci =
@@ -86,9 +85,9 @@ rollupUpdateTests setup =
     ( do
         ts ← powersOfTauSubset
         let
-          setupB = ledgerSetup @LedgerCircuitGates @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
-          proofB = ledgerProof @LedgerCircuitGates @ByteString ts proverSecret compiledCircuit lci & mkProof
-          proofB2 = ledgerProof @LedgerCircuitGates @ByteString ts proverSecret compiledCircuit lci2 & mkProof
+          setupB = ledgerSetup @G @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
+          proofB = ledgerProof @G @ByteString ts proverSecret compiledCircuit lci & mkProof
+          proofB2 = ledgerProof @G @ByteString ts proverSecret compiledCircuit lci2 & mkProof
         pure (ts, setupB, proofB, proofB2)
     )
     (\_ → pure ())
