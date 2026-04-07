@@ -113,20 +113,10 @@ import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 -- | In-process mutable state and cryptographic material for the batcher.
 --
--- Two sets of TVars are maintained with distinct ownership:
---
--- __ChainSync-owned__ ('bsLedgerStateVar', 'bsLeafHashesVar', 'bsMerkleTreeVar'):
---   Reflect the on-chain state as seen by ChainSync.  Used for external-update
---   detection, rollback recovery, and query endpoints.  The 'State' stored here
---   goes through an Integer round-trip (@fromConstant . feToInteger@) when read
---   from the on-chain datum, so its 'sUTxO' may differ from the original
---   'FieldElement'.
---
--- __Batcher-owned__ ('bsBatcherStateVar', 'bsUtxoPreimageVar'):
---   Maintained directly from 'updateLedgerState' output — no round-trip.
---   The state and preimage are guaranteed mutually consistent
---   (@sUTxO == mHash(fromLeaves(fmap (hHash . hash) preimage))@) and are
---   the ONLY values used for ZK proof generation.
+-- ChainSync is the single source of truth for state and Merkle tree leaf hashes.
+-- The Batcher reads state from ChainSync's TVars and constructs the preimage
+-- from the @utxo_preimages@ DB table. The tree is derived from the preimage
+-- (guaranteed consistent after the @search@ fix in symbolic-base).
 data BatcherState = BatcherState
   { bsLedgerStateVar ∷ !(TVar (State I))
   -- ^ Rollup state. Written by ChainSync only.
@@ -134,15 +124,6 @@ data BatcherState = BatcherState
   -- ^ Merkle tree leaf hashes. Written by ChainSync only.
   , bsMerkleTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
   -- ^ Merkle tree derived from leaf hashes. Written by ChainSync only.
-  , bsBatcherStateVar ∷ !(TVar (State I))
-  -- ^ Batcher's own copy of the rollup state (from 'updateLedgerState').
-  -- Guaranteed consistent with 'bsBatcherTreeVar' and 'bsUtxoPreimageVar'.
-  -- Written by Batcher only.
-  , bsBatcherTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
-  -- ^ Batcher's own tree (from 'updateLedgerState'). Written by Batcher only.
-  , bsUtxoPreimageVar ∷ !(TVar (Leaves Ud (UTxO A I)))
-  -- ^ UTxO preimage vector. Written by Batcher after each successful batch.
-  -- Guaranteed hash-consistent with 'bsBatcherStateVar' (no round-trip).
   , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
   , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A S N TxCount)
   , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
@@ -161,21 +142,14 @@ initBatcherState dbPath = do
         Just (PersistedState st lh) → (st, lh)
         Nothing → (initialState, initialLeafHashes)
       initTree = SymMerkle.fromLeaves initLH
-  -- On startup, construct the initial preimage from the preimage DB.
-  -- This is the one place where JSON-deserialized UTxOs are used.
-  -- After the first batch, the in-memory preimage is always fresh.
-  initPreimage ← constructPreimage dbPath initLH
   stateVar ← newTVarIO initSt
   leafHashesVar ← newTVarIO initLH
   treeVar ← newTVarIO initTree
-  batcherStateVar ← newTVarIO initSt
-  batcherTreeVar ← newTVarIO initTree
-  preimageVar ← newTVarIO initPreimage
   historyVar ← newTVarIO []
   ts ← powersOfTauSubset
   let circuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
-  pure $ BatcherState stateVar leafHashesVar treeVar batcherStateVar batcherTreeVar preimageVar ts circuit proverSecret historyVar
+  pure $ BatcherState stateVar leafHashesVar treeVar ts circuit proverSecret historyVar
 
 initialLeafHashes ∷ Leaves Ud (FieldElement I)
 initialLeafHashes = pure (nullUTxOHash @A @I)
@@ -446,14 +420,26 @@ constructPreimage dbPath leafHashes = do
 
 processBatch ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
 processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
-  -- Read state and preimage from the Batcher-owned TVars (NOT ChainSync's).
-  -- Both originate from the same updateLedgerState call, guaranteeing
-  -- sUTxO == mHash(tree). ChainSync's state goes through an Integer
-  -- round-trip that can change the FieldElement, so it must not be used
-  -- for proof generation.
-  (prevState, prevTree, prevUtxoPreimage) ←
+  -- Read state from ChainSync's TVar, construct preimage from DB, derive tree.
+  -- With the search fix in symbolic-base, fromLeaves(fmap(hHash.hash) preimage)
+  -- produces the same tree as updateLedgerState's output.
+  (prevState, prevLeafHashes) ←
     atomically $
-      (,,) <$> readTVar bsBatcherStateVar <*> readTVar bsBatcherTreeVar <*> readTVar bsUtxoPreimageVar
+      (,) <$> readTVar bsLedgerStateVar <*> readTVar bsLeafHashesVar
+  prevUtxoPreimage ← constructPreimage ctxDbPath prevLeafHashes
+  let prevTree = SymMerkle.fromLeaves (fmap (hHash . hash) prevUtxoPreimage)
+      treeRoot = feToInteger (SymMerkle.mHash prevTree)
+      stateRoot = feToInteger (sUTxO prevState)
+  -- Diagnostic: detect tree/state inconsistency before proof generation.
+  gyLogInfo ctxProviders mempty $
+    "processBatch: stateRoot=" <> show stateRoot <> " treeRoot=" <> show treeRoot
+      <> " match=" <> show (stateRoot == treeRoot)
+  -- Also check: does the tree from ChainSync's leaf hashes match?
+  let chainSyncTreeRoot = feToInteger (SymMerkle.mHash (SymMerkle.fromLeaves prevLeafHashes))
+  gyLogInfo ctxProviders mempty $
+    "processBatch: chainSyncTreeRoot=" <> show chainSyncTreeRoot
+      <> " matchState=" <> show (chainSyncTreeRoot == stateRoot)
+      <> " matchPreimage=" <> show (chainSyncTreeRoot == treeRoot)
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
       batch = TransactionBatch {tbTransactions = unsafeToVector' (map qtTransaction queuedTxs)}
@@ -470,7 +456,7 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
           , lciStateWitness = witness
           }
       proof =
-        ledgerProof @ByteString
+        ledgerProof @_ @ByteString
           bsTrustedSetup
           bsProverSecret
           bsLedgerCircuit
@@ -487,6 +473,20 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         , utxo /= nullUTxO @A @I
         ]
   savePreimagesDb ctxDbPath newEntries
+  -- Diagnostic: verify preimages survive DB round-trip.
+  do
+    let newLeafHashes = fmap (hHash . hash) newPreimage
+    reloadedPreimage ← constructPreimage ctxDbPath newLeafHashes
+    let reloadedTree = SymMerkle.fromLeaves (fmap (hHash . hash) reloadedPreimage)
+        originalRoot = feToInteger (SymMerkle.mHash (SymMerkle.fromLeaves newLeafHashes))
+        reloadedRoot = feToInteger (SymMerkle.mHash reloadedTree)
+        newStateRoot = feToInteger (sUTxO newState)
+    gyLogInfo ctxProviders mempty $
+      "processBatch post: newStateRoot=" <> show newStateRoot
+        <> " originalTreeRoot=" <> show originalRoot
+        <> " reloadedTreeRoot=" <> show reloadedRoot
+        <> " originalMatch=" <> show (newStateRoot == originalRoot)
+        <> " reloadedMatch=" <> show (newStateRoot == reloadedRoot)
   -- Submit the L1 transaction.
   submittedTxId ←
     runGYTxMonadIO
@@ -506,12 +506,6 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus delta) ctxRollupBuildInfo
         body ← buildTxBody skel
         signAndSubmitConfirmed body
-  -- Update the Batcher-owned state and preimage. These are separate from
-  -- ChainSync's TVars, so no race condition.
-  atomically $ do
-    writeTVar bsBatcherStateVar newState
-    writeTVar bsBatcherTreeVar newTree
-    writeTVar bsUtxoPreimageVar newPreimage
-  -- ChainSync will independently update its own TVars when it sees the block.
+  -- ChainSync will update state/leafHashes/tree TVars when it sees the block.
   recordBatchDb ctxDbPath ids (Text.pack (show submittedTxId))
   pure submittedTxId

@@ -256,6 +256,18 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
       newLeafHashes = applyLeafUpdates modifiedLeaves currentLeafHashes
       newTree = SymMerkle.fromLeaves newLeafHashes
 
+  -- Diagnostic: log delta details and tree root comparison
+  gyLogInfo (ctxProviders ctx) mempty $
+    "Chain sync delta: " <> show (length delta) <> " values, "
+      <> show (length modifiedLeaves) <> " modifications: "
+      <> show [(pos, feToInteger h) | (pos, h) <- modifiedLeaves]
+  let computedRoot = feToInteger (SymMerkle.mHash newTree)
+      expectedRoot = utxoTreeRoot newRollupState
+  gyLogInfo (ctxProviders ctx) mempty $
+    "Chain sync tree: computedRoot=" <> show computedRoot
+      <> " expectedRoot=" <> show expectedRoot
+      <> " match=" <> show (computedRoot == expectedRoot)
+
   -- Update TVars and save rollback snapshot.
   atomically $ do
     writeTVar (bsLedgerStateVar bs) newState
@@ -273,10 +285,10 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
 
 -- | Extract (position, newLeafHash) pairs from the flat delta list.
 --
--- Delta structure: @[bi*(pos,hash)] ++ [t*n*pos] ++ [t*n*(isActive,pos,hash)]@
+-- Delta structure: @[bi*(isActive,pos,hash)] ++ [t*n*pos] ++ [t*n*(isActive,pos,hash)]@
 --
 -- For inputs (consumed positions), the new hash is 'nullUTxOHash'.
--- For bridge-ins and active outputs, the new hash is given in the delta.
+-- For active bridge-ins and active outputs, the new hash is given in the delta.
 -- Outputs and bridge-ins override inputs at the same position.
 --
 -- Null\/padding inputs (from 'nullOutputRef') have meaningless positions in
@@ -298,7 +310,7 @@ collectModifiedLeaves
 collectModifiedLeaves biCount txCount nCount currentLeafHashes delta =
   Map.toList finalMap
  where
-  (biPart, rest1) = splitAt (biCount * 2) delta
+  (biPart, rest1) = splitAt (biCount * 3) delta
   (inputPart, rest2) = splitAt (txCount * nCount) rest1
   outputPart = rest2
 
@@ -323,18 +335,14 @@ collectModifiedLeaves biCount txCount nCount currentLeafHashes delta =
     , hashAt pos /= nullHash
     ]
 
-  -- Bridge-ins: (pos, hash) pairs.
-  biMap = Map.fromList (pairUpFE biPart)
+  -- Bridge-ins: (isActive, pos, hash) triples → (pos, hash) for active.
+  biMap = Map.fromList (activeOutputLeaves biPart)
 
   -- Active outputs: (isActive, pos, hash) triples → (pos, hash) for active.
   outMap = Map.fromList (activeOutputLeaves outputPart)
 
   -- Outputs override bridge-ins override inputs.
   finalMap = outMap `Map.union` biMap `Map.union` inputMap
-
-  pairUpFE ∷ [Integer] → [(Integer, FieldElement I)]
-  pairUpFE (pos : h : rest) = (pos, fromConstant h) : pairUpFE rest
-  pairUpFE _ = []
 
   activeOutputLeaves ∷ [Integer] → [(Integer, FieldElement I)]
   activeOutputLeaves (active : pos : h : rest)
