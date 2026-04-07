@@ -26,7 +26,7 @@ import Control.Lens ((^.))
 import Control.Monad (forM_, when)
 import Data.List (find)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, fromMaybe)
 import Data.Word (Word64)
 import GeniusYield.Providers.Node (networkIdToLocalNodeConnectInfo)
 import GeniusYield.Types (
@@ -216,7 +216,7 @@ findRollupUpdate (GYNonAdaToken nftMP nftTN) (Api.Tx txBody _) =
           Just
             RollupStateUpdate
               { rsuNewRollupState = newState
-              , rsuDelta = maybe [] id extractDelta
+              , rsuDelta = fromMaybe [] extractDelta
               }
         _ → Nothing
 

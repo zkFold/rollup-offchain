@@ -19,7 +19,7 @@ import Control.Concurrent.STM (
   writeTVar,
  )
 import Control.Exception (Exception, Handler (Handler), catches, displayException, throwIO)
-import Control.Monad (forM, forever, when)
+import Control.Monad (forM, forever, when, unless)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.Aeson (encode)
 import Data.ByteString (ByteString)
@@ -221,7 +221,7 @@ enqueueTx ctx queued = do
 revalidatePendingTxs ∷ Ctx → BatcherState → IO ()
 revalidatePendingTxs Ctx {..} BatcherState {..} = do
   pending ← getPendingTxsWithIdsDb ctxDbPath
-  when (not (null pending)) $ do
+  unless (null pending) $ do
     leafHashes ← readTVarIO bsLeafHashesVar
     let nullHash = nullUTxOHash @A @I
         nonNullHashTexts =
@@ -238,7 +238,7 @@ revalidatePendingTxs Ctx {..} BatcherState {..} = do
           , let inRefs = fromVector (unComp1 (inputs (qtTransaction qtx)))
           , not (all isInputValid inRefs)
           ]
-    when (not (null invalidIds)) $ do
+    unless (null invalidIds) $ do
       gyLogInfo ctxProviders mempty $
         "Revalidation: failing "
           <> show (length invalidIds)

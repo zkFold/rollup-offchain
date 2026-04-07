@@ -5,11 +5,10 @@ module ZkFold.Cardano.Rollup.Api.Utils (
 ) where
 
 import Data.Function (($), (&))
-import Data.Functor (fmap)
 import Data.List (iterate, zip3)
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeNats (KnownNat, type (-))
-import ZkFold.Algebra.Class (FromConstant (..), PrimeField (..), ToConstant (..), one, zero)
+import ZkFold.Algebra.Class (PrimeField (..), ToConstant (..), one, zero)
 import qualified ZkFold.Algebra.Class as Algebra
 import ZkFold.Cardano.UPLC.RollupSimple.Types
 import ZkFold.Data.MerkleTree (MerkleTreeSize)
@@ -23,11 +22,11 @@ import ZkFold.Symbolic.Interpreter (Interpreter)
 import ZkFold.Symbolic.Data.Bool (BoolType (false))
 import ZkFold.Symbolic.Data.Bool qualified as ZkBool
 import ZkFold.Symbolic.Ledger.Types
-import ZkFold.Symbolic.Ledger.Types.Field (RollupBF, RollupBFInterpreter)
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Validation.State (StateWitness (..))
 import ZkFold.Symbolic.Ledger.Validation.Transaction (TransactionWitness (..))
 import ZkFold.Symbolic.Ledger.Validation.TransactionBatch (TransactionBatchWitness (..))
-import Prelude (Bool, Integer, Num (..), concatMap, map, not, zip, zip3, (&&), (==), (/=), (.), (<>))
+import Prelude (Integer, concatMap, map, not, zip, (&&), (==), (/=), (.), (<>))
 
 -- | Convert a field element to an 'Integer'.
 feToInteger ∷ (PrimeField a, IntegralOf a ~ Integer) ⇒ FieldElement (Interpreter a) → Integer
@@ -100,7 +99,7 @@ computeDelta witness batch bridgedIn newSt =
       (\(tx, tw) →
         let txId' = txId tx & hHash
          in concatMap
-              (\((output :*: bout), entry, ix) →
+              (\(output :*: bout, entry, ix) →
                 let isBout = bout /= (false ∷ ZkBool.Bool RollupBFInterpreter)
                     isNull = output == nullOutput
                     isActive = not isBout && not isNull
