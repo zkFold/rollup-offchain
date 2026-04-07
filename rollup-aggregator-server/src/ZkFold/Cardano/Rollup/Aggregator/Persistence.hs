@@ -59,7 +59,12 @@ data PersistedState = PersistedState
   deriving (FromJSON, ToJSON) via CustomJSON '[FieldLabelModifier '[StripPrefix "ps", LowerFirst]] PersistedState
 
 withConn ∷ FilePath → (Connection → IO a) → IO a
-withConn dbPath = bracket (open dbPath) close
+withConn dbPath = bracket openWithTimeout close
+ where
+  openWithTimeout = do
+    conn ← open dbPath
+    execute_ conn "PRAGMA busy_timeout = 5000"
+    pure conn
 
 -- | Initialise the SQLite database: enable WAL mode and create tables.
 initDb ∷ FilePath → IO ()
