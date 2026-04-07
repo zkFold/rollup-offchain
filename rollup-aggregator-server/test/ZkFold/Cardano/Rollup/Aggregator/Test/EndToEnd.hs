@@ -74,6 +74,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   TxResponse (..),
   TxStatus (..),
   TxsByAddressResponse (..),
+  -- G,
  )
 import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger, stateToRollupState)
@@ -98,7 +99,7 @@ endToEndTests setup =
         let
           -- circuit = ledgerCircuit @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I
           setupBytes =
-            -- ledgerSetup @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I ts circuit
+            -- ledgerSetup @G @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I ts circuit
             --   & mkSetup
             fromMaybe (error "Unable to decode setup-bytes") (Aeson.decode setupBytesJson)
         pure (dbPath, batcherState, setupBytes)

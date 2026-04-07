@@ -10,6 +10,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   TxCount,
   Tx,
   TxSignatures,
+  G,
   QueuedTx (..),
   SymUTxO,
 
@@ -53,6 +54,7 @@ import Data.Time.Clock (UTCTime)
 import Deriving.Aeson
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeLits (Symbol)
+import GHC.TypeNats (type (^))
 import GeniusYield.Swagger.Utils (dropSymbolAndCamelToSnake)
 import GeniusYield.Types (GYAddress, GYAddressBech32, GYTx, GYTxId, GYTxWitness, GYValue, LowerFirst)
 import GeniusYield.Types.OpenApi ()
@@ -84,6 +86,8 @@ type TxCount = 2
 type Tx = Transaction N A I
 
 type TxSignatures = (Vector S :.: (PublicKey :*: EdDSAPoint :*: EdDSAScalarField)) I
+
+type G = 2 ^ 18
 
 -- | Type alias for a symbolic UTxO in the interpreter context.
 type SymUTxO = UTxO A I

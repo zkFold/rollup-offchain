@@ -16,13 +16,12 @@ import ZkFold.Cardano.Rollup.Api
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Cardano.Rollup.Types
 import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
+import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
-  LedgerCircuitGates,
   ledgerCircuit,
   ledgerSetup,
   mkSetup,
  )
-import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Ledger.Types (nullUTxO)
 
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initialState)
@@ -112,7 +111,7 @@ runCommand RollupSeedCommand {..} = do
   Prelude.putStrLn "Generating setup parameters (this may take a while)..."
   ts ← powersOfTauSubset
   let compiledCircuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
-  let setupB = ledgerSetup @LedgerCircuitGates @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
+  let setupB = ledgerSetup @G @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
 
   withCfgProviders coreConfig "rollup-seed" $ \providers → do
     (initializedBuildInfo, txBodySeed) ←

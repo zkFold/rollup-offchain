@@ -75,8 +75,8 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   failTxsDb,
   getPendingTxsWithIdsDb,
   loadState,
-  lookupPreimagesDb,
   lookupPreimagesByRefDb,
+  lookupPreimagesDb,
   recordBatchDb,
   revertProcessingTxsDb,
   revertTxsDb,
@@ -101,7 +101,6 @@ import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
   LedgerCircuit,
-  LedgerCircuitGates,
   LedgerContractInput (..),
   ledgerCircuit,
   ledgerProof,
@@ -124,7 +123,7 @@ data BatcherState = BatcherState
   -- ^ Merkle tree leaf hashes. Written by ChainSync only.
   , bsMerkleTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
   -- ^ Merkle tree derived from leaf hashes. Written by ChainSync only.
-  , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
+  , bsTrustedSetup ∷ !(TrustedSetup (G + 6))
   , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A S N TxCount)
   , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
   , bsStateHistoryVar ∷ !(TVar [(Word64, State I, Leaves Ud (FieldElement I))])
@@ -207,7 +206,8 @@ enqueueTx ctx queued = do
           let unknownCount = length [() | ht ← hashTexts, not (Map.member ht preimageMap)]
           when (unknownCount > 0) $
             gyLogWarning (ctxProviders ctx) mempty $
-              "enqueueTx: " <> show unknownCount
+              "enqueueTx: "
+                <> show unknownCount
                 <> " provided UTxO(s) not found in preimage DB (may be from pending txs or external aggregator)"
           let outs = fromVector (unComp1 (outputs tx))
               outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
@@ -240,7 +240,8 @@ revalidatePendingTxs Ctx {..} BatcherState {..} = do
           ]
     when (not (null invalidIds)) $ do
       gyLogInfo ctxProviders mempty $
-        "Revalidation: failing " <> show (length invalidIds)
+        "Revalidation: failing "
+          <> show (length invalidIds)
           <> " pending txs with consumed inputs"
       failTxsDb ctxDbPath invalidIds
 
@@ -329,7 +330,10 @@ startBatcher ctx@Ctx {..} bs = do
     prevLen ← readTVarIO lastChainSyncLenRef
     when (currentLen /= prevLen) $ do
       gyLogInfo ctxProviders mempty $
-        "ChainSync state changed (len " <> show prevLen <> " → " <> show currentLen
+        "ChainSync state changed (len "
+          <> show prevLen
+          <> " → "
+          <> show currentLen
           <> "), revalidating pending txs"
       revertProcessingTxsDb ctxDbPath
       revalidatePendingTxs ctx bs
@@ -385,8 +389,11 @@ waitForChainSync Ctx {..} BatcherState {..} lastChainSyncLenRef = do
     let currentLen = feToInteger (sLength st)
     check (currentLen > prevLen)
   case mResult of
-    Nothing → gyLogWarning ctxProviders mempty
-      "Timed out waiting for ChainSync (120s). Proceeding."
+    Nothing →
+      gyLogWarning
+        ctxProviders
+        mempty
+        "Timed out waiting for ChainSync (120s). Proceeding."
     Just () → do
       newLen ← feToInteger . sLength <$> readTVarIO bsLedgerStateVar
       atomically $ writeTVar lastChainSyncLenRef newLen
@@ -409,14 +416,21 @@ constructPreimage dbPath leafHashes = do
     -- This indicates a key mismatch between what ChainSync stored
     -- (from delta) and what the Batcher stored (from updateLedgerState).
     putStrLn $
-      "constructPreimage: " <> show missed <> " of " <> show (length nonNullHashes)
+      "constructPreimage: "
+        <> show missed
+        <> " of "
+        <> show (length nonNullHashes)
         <> " non-null leaf hashes NOT found in preimage DB"
-  pure $ fmap (\h →
-    if h == nullHash
-      then nullUTxO @A @I
-      else let key = decodeUtf8 . toStrict . encode $ h
-            in Map.findWithDefault (nullUTxO @A @I) key preimageMap
-    ) leafHashes
+  pure $
+    fmap
+      ( \h →
+          if h == nullHash
+            then nullUTxO @A @I
+            else
+              let key = decodeUtf8 . toStrict . encode $ h
+               in Map.findWithDefault (nullUTxO @A @I) key preimageMap
+      )
+      leafHashes
 
 processBatch ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
 processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
@@ -432,14 +446,21 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
       stateRoot = feToInteger (sUTxO prevState)
   -- Diagnostic: detect tree/state inconsistency before proof generation.
   gyLogInfo ctxProviders mempty $
-    "processBatch: stateRoot=" <> show stateRoot <> " treeRoot=" <> show treeRoot
-      <> " match=" <> show (stateRoot == treeRoot)
+    "processBatch: stateRoot="
+      <> show stateRoot
+      <> " treeRoot="
+      <> show treeRoot
+      <> " match="
+      <> show (stateRoot == treeRoot)
   -- Also check: does the tree from ChainSync's leaf hashes match?
   let chainSyncTreeRoot = feToInteger (SymMerkle.mHash (SymMerkle.fromLeaves prevLeafHashes))
   gyLogInfo ctxProviders mempty $
-    "processBatch: chainSyncTreeRoot=" <> show chainSyncTreeRoot
-      <> " matchState=" <> show (chainSyncTreeRoot == stateRoot)
-      <> " matchPreimage=" <> show (chainSyncTreeRoot == treeRoot)
+    "processBatch: chainSyncTreeRoot="
+      <> show chainSyncTreeRoot
+      <> " matchState="
+      <> show (chainSyncTreeRoot == stateRoot)
+      <> " matchPreimage="
+      <> show (chainSyncTreeRoot == treeRoot)
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
       batch = TransactionBatch {tbTransactions = unsafeToVector' (map qtTransaction queuedTxs)}
@@ -482,11 +503,16 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         reloadedRoot = feToInteger (SymMerkle.mHash reloadedTree)
         newStateRoot = feToInteger (sUTxO newState)
     gyLogInfo ctxProviders mempty $
-      "processBatch post: newStateRoot=" <> show newStateRoot
-        <> " originalTreeRoot=" <> show originalRoot
-        <> " reloadedTreeRoot=" <> show reloadedRoot
-        <> " originalMatch=" <> show (newStateRoot == originalRoot)
-        <> " reloadedMatch=" <> show (newStateRoot == reloadedRoot)
+      "processBatch post: newStateRoot="
+        <> show newStateRoot
+        <> " originalTreeRoot="
+        <> show originalRoot
+        <> " reloadedTreeRoot="
+        <> show reloadedRoot
+        <> " originalMatch="
+        <> show (newStateRoot == originalRoot)
+        <> " reloadedMatch="
+        <> show (newStateRoot == reloadedRoot)
   -- Submit the L1 transaction.
   submittedTxId ←
     runGYTxMonadIO
