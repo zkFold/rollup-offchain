@@ -442,31 +442,12 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
       (,) <$> readTVar bsLedgerStateVar <*> readTVar bsLeafHashesVar
   prevUtxoPreimage ← constructPreimage ctxDbPath prevLeafHashes
   let prevTree = SymMerkle.fromLeaves (fmap (hHash . hash) prevUtxoPreimage)
-      treeRoot = feToInteger (SymMerkle.mHash prevTree)
-      stateRoot = feToInteger (sUTxO prevState)
-  -- Diagnostic: detect tree/state inconsistency before proof generation.
-  gyLogInfo ctxProviders mempty $
-    "processBatch: stateRoot="
-      <> show stateRoot
-      <> " treeRoot="
-      <> show treeRoot
-      <> " match="
-      <> show (stateRoot == treeRoot)
-  -- Also check: does the tree from ChainSync's leaf hashes match?
-  let chainSyncTreeRoot = feToInteger (SymMerkle.mHash (SymMerkle.fromLeaves prevLeafHashes))
-  gyLogInfo ctxProviders mempty $
-    "processBatch: chainSyncTreeRoot="
-      <> show chainSyncTreeRoot
-      <> " matchState="
-      <> show (chainSyncTreeRoot == stateRoot)
-      <> " matchPreimage="
-      <> show (chainSyncTreeRoot == treeRoot)
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
       batch = TransactionBatch {tbTransactions = unsafeToVector' (map qtTransaction queuedTxs)}
       sigMaterial = Comp1 (unsafeToVector' (map qtSignatures queuedTxs))
       allBridgeOuts = concatMap qtBridgeOuts queuedTxs
-      newState :*: witness :*: newTree :*: preimageWrapped =
+      newState :*: witness :*: _newTree :*: preimageWrapped =
         updateLedgerState prevState prevTree prevUtxoPreimage bridgedIn batch sigMaterial
       newPreimage = unComp1 preimageWrapped
       lci =
@@ -494,25 +475,6 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         , utxo /= nullUTxO @A @I
         ]
   savePreimagesDb ctxDbPath newEntries
-  -- Diagnostic: verify preimages survive DB round-trip.
-  do
-    let newLeafHashes = fmap (hHash . hash) newPreimage
-    reloadedPreimage ← constructPreimage ctxDbPath newLeafHashes
-    let reloadedTree = SymMerkle.fromLeaves (fmap (hHash . hash) reloadedPreimage)
-        originalRoot = feToInteger (SymMerkle.mHash (SymMerkle.fromLeaves newLeafHashes))
-        reloadedRoot = feToInteger (SymMerkle.mHash reloadedTree)
-        newStateRoot = feToInteger (sUTxO newState)
-    gyLogInfo ctxProviders mempty $
-      "processBatch post: newStateRoot="
-        <> show newStateRoot
-        <> " originalTreeRoot="
-        <> show originalRoot
-        <> " reloadedTreeRoot="
-        <> show reloadedRoot
-        <> " originalMatch="
-        <> show (newStateRoot == originalRoot)
-        <> " reloadedMatch="
-        <> show (newStateRoot == reloadedRoot)
   -- Submit the L1 transaction.
   submittedTxId ←
     runGYTxMonadIO

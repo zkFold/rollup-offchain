@@ -24,7 +24,6 @@ import Control.Concurrent.STM (atomically, readTVar, readTVarIO, writeTVar)
 import Control.Exception (SomeException, catch)
 import Control.Lens ((^.))
 import Control.Monad (forM_, when)
-import Data.Function ((&))
 import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
@@ -43,7 +42,7 @@ import ZkFold.Algebra.Class (FromConstant (..))
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (saveState)
-import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, N, TxCount, Ud)
+import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
 import ZkFold.Cardano.UPLC.RollupSimple.Types (RollupSimpleRed (..), RollupState (..))
@@ -255,18 +254,6 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
   let modifiedLeaves = collectModifiedLeaves biCount txCount nCount currentLeafHashes delta
       newLeafHashes = applyLeafUpdates modifiedLeaves currentLeafHashes
       newTree = SymMerkle.fromLeaves newLeafHashes
-
-  -- Diagnostic: log delta details and tree root comparison
-  gyLogInfo (ctxProviders ctx) mempty $
-    "Chain sync delta: " <> show (length delta) <> " values, "
-      <> show (length modifiedLeaves) <> " modifications: "
-      <> show [(pos, feToInteger h) | (pos, h) <- modifiedLeaves]
-  let computedRoot = feToInteger (SymMerkle.mHash newTree)
-      expectedRoot = utxoTreeRoot newRollupState
-  gyLogInfo (ctxProviders ctx) mempty $
-    "Chain sync tree: computedRoot=" <> show computedRoot
-      <> " expectedRoot=" <> show expectedRoot
-      <> " match=" <> show (computedRoot == expectedRoot)
 
   -- Update TVars and save rollback snapshot.
   atomically $ do
