@@ -304,12 +304,11 @@ data TxStatus = TxPending | TxProcessing | TxBatched
     via CustomJSON '[ConstructorTagModifier '[StripPrefix "Tx", LowerFirst]] TxStatus
 
 instance ToSchema TxStatus where
-  declareNamedSchema proxy =
+  declareNamedSchema =
     OpenApi.genericDeclareNamedSchema
       OpenApi.defaultSchemaOptions
         { OpenApi.constructorTagModifier = go
         }
-      proxy
    where
     go s = case drop 2 s of
       [] → []

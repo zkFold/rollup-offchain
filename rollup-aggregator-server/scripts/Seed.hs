@@ -133,7 +133,7 @@ runCommand RollupSeedCommand {..} = do
 
     writeRollupConfig nid rscOutput initializedBuildInfo
 
-    let initialLeafHashes = fmap (hHash . hash) (pure (nullUTxO @A @I))
+    let initialLeafHashes = pure ((hHash . hash) (nullUTxO @A @I))
     createDirectoryIfMissing True (takeDirectory rscStateFile)
     initDb rscStateFile
     saveState rscStateFile state0 initialLeafHashes
