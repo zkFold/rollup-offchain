@@ -21,7 +21,9 @@ import Cardano.Ledger.Plutus.Data qualified as Ledger
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, readTVar, readTVarIO, writeTVar)
-import Control.Exception (SomeException, catch)
+import Control.Exception (AsyncException, SomeException, catch, fromException, throwIO)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.Time.Clock (getCurrentTime)
 import Control.Lens ((^.))
 import Control.Monad (forM_, when)
 import Data.List (find)
@@ -68,24 +70,42 @@ startChainSync
   → IO (Async.Async ())
 startChainSync ctx bs socketPath = do
   let connInfo = networkIdToLocalNodeConnectInfo (ctxNetworkId ctx) socketPath
-  a ← Async.async $ chainSyncLoop ctx bs connInfo
+  backoffRef ← newIORef initialBackoffMicros
+  a ← Async.async $ chainSyncLoop ctx bs connInfo backoffRef
   Async.link a
   pure a
 
--- | The chain sync loop. Reconnects on failure.
-chainSyncLoop ∷ Ctx → BatcherState → Api.LocalNodeConnectInfo → IO ()
-chainSyncLoop ctx bs connInfo = do
+-- | Initial and maximum backoff for reconnection (in microseconds).
+initialBackoffMicros, maxBackoffMicros ∷ Int
+initialBackoffMicros = 5_000_000 -- 5 seconds
+maxBackoffMicros = 300_000_000 -- 5 minutes
+
+-- | The chain sync loop. Reconnects on recoverable failure with exponential backoff.
+-- Async exceptions (e.g. from 'Async.link' or graceful shutdown) are re-thrown
+-- immediately so the process can exit cleanly.
+chainSyncLoop ∷ Ctx → BatcherState → Api.LocalNodeConnectInfo → IORef Int → IO ()
+chainSyncLoop ctx bs connInfo backoffRef = do
   gyLogInfo (ctxProviders ctx) mempty "Chain sync: connecting to local node"
   Api.connectToLocalNode connInfo protocols
-    `catch` \(e ∷ SomeException) → do
-      gyLogError (ctxProviders ctx) mempty $
-        "Chain sync: connection error: " <> show e <> ", reconnecting in 5s"
-      threadDelay 5_000_000
-      chainSyncLoop ctx bs connInfo
+    `catch` \(e ∷ SomeException) →
+      -- Re-throw async exceptions (ThreadKilled, cancel, linked exceptions)
+      -- so that Async.link and graceful shutdown work correctly.
+      case fromException @AsyncException e of
+        Just _ → throwIO e
+        Nothing → do
+          backoff ← readIORef backoffRef
+          let backoffSecs = backoff `div` 1_000_000
+          gyLogError (ctxProviders ctx) mempty $
+            "Chain sync: connection error: " <> show e
+              <> ", reconnecting in " <> show backoffSecs <> "s"
+          threadDelay backoff
+          -- Exponential backoff: double up to the cap.
+          writeIORef backoffRef (min maxBackoffMicros (backoff * 2))
+          chainSyncLoop ctx bs connInfo backoffRef
  where
   protocols =
     Api.LocalNodeClientProtocols
-      { localChainSyncClient = Api.LocalChainSyncClient $ chainSyncClient ctx bs
+      { localChainSyncClient = Api.LocalChainSyncClient $ chainSyncClient ctx bs backoffRef
       , localTxSubmissionClient = Nothing
       , localStateQueryClient = Nothing
       , localTxMonitoringClient = Nothing
@@ -96,10 +116,19 @@ chainSyncLoop ctx bs connInfo = do
 chainSyncClient
   ∷ Ctx
   → BatcherState
+  → IORef Int
+  -- ^ Backoff ref — reset to initial on successful block processing.
   → Api.ChainSyncClient Api.BlockInMode Api.ChainPoint Api.ChainTip IO ()
-chainSyncClient ctx bs =
+chainSyncClient ctx bs backoffRef =
   Api.ChainSyncClient $ pure initialise
  where
+  -- | Bump the liveness timestamp and reset backoff after successful processing.
+  touch ∷ IO ()
+  touch = do
+    now ← getCurrentTime
+    atomically $ writeTVar (bsChainSyncAliveVar bs) now
+    writeIORef backoffRef initialBackoffMicros
+
   initialise =
     Api.Sync.SendMsgFindIntersect [Api.ChainPointAtGenesis] $
       Api.Sync.ClientStIntersect
@@ -116,9 +145,11 @@ chainSyncClient ctx bs =
     Api.Sync.ClientStNext
       { Api.Sync.recvMsgRollForward = \block _tip → Api.ChainSyncClient $ do
           handleRollForward ctx bs block
+          touch
           pure requestNext
       , Api.Sync.recvMsgRollBackward = \point _tip → Api.ChainSyncClient $ do
           handleRollback ctx bs point
+          touch
           pure requestNext
       }
 

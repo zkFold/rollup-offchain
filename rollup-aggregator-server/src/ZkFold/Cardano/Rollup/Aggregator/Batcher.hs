@@ -26,6 +26,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString.Lazy (toStrict)
 import Data.Foldable (for_)
 import Data.Function ((&))
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
@@ -34,6 +35,7 @@ import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8)
+import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Word (Word64)
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeNats (natVal, type (+))
@@ -130,6 +132,9 @@ data BatcherState = BatcherState
   , bsStateHistoryVar ∷ !(TVar [(Word64, State I, Leaves Ud (FieldElement I))])
   -- ^ State history for rollback recovery. Written by ChainSync, persisted to SQLite.
   -- Each entry is (slotNo, state, leafHashes). Most recent first, capped at 20.
+  , bsChainSyncAliveVar ∷ !(TVar UTCTime)
+  -- ^ Last time ChainSync processed a block. Bumped on every roll-forward/roll-backward.
+  -- The Batcher checks this to detect a stuck ChainSync thread.
   }
 
 -- | Initialise batcher state by loading persisted state from the SQLite database.
@@ -147,10 +152,12 @@ initBatcherState dbPath = do
   treeVar ← newTVarIO initTree
   history ← loadStateHistory dbPath
   historyVar ← newTVarIO history
+  now ← getCurrentTime
+  aliveVar ← newTVarIO now
   ts ← powersOfTauSubset
   let circuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
-  pure $ BatcherState stateVar leafHashesVar treeVar ts circuit proverSecret historyVar
+  pure $ BatcherState stateVar leafHashesVar treeVar ts circuit proverSecret historyVar aliveVar
 
 initialLeafHashes ∷ Leaves Ud (FieldElement I)
 initialLeafHashes = pure (nullUTxOHash @A @I)
@@ -322,9 +329,25 @@ startBatcher ∷ Ctx → BatcherState → IO ()
 startBatcher ctx@Ctx {..} bs = do
   -- Track ChainSync's chain length to detect external updates and for waitForChainSync.
   lastChainSyncLenRef ← readTVarIO (bsLedgerStateVar bs) >>= newTVarIO . feToInteger . sLength
+  chainSyncWarnedRef ← newIORef False
   forever $ do
     let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
     threadDelay delayMicros
+    -- Check ChainSync liveness: warn if no block processed in 5 minutes.
+    now ← getCurrentTime
+    lastAlive ← readTVarIO (bsChainSyncAliveVar bs)
+    let staleSecs = realToFrac (diffUTCTime now lastAlive) ∷ Double
+    alreadyWarned ← readIORef chainSyncWarnedRef
+    if staleSecs > 300
+      then
+        unless alreadyWarned $ do
+          gyLogWarning ctxProviders mempty $
+            "ChainSync appears stuck: no block processed in " <> show (round staleSecs ∷ Int) <> "s"
+          writeIORef chainSyncWarnedRef True
+      else
+        when alreadyWarned $ do
+          gyLogInfo ctxProviders mempty "ChainSync recovered, processing blocks again"
+          writeIORef chainSyncWarnedRef False
     -- Detect state changes from ChainSync (external updates or rollbacks).
     -- bsLedgerStateVar is written ONLY by ChainSync, so changes indicate
     -- on-chain state updates.
