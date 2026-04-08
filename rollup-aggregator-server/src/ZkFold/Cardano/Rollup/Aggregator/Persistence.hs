@@ -32,20 +32,19 @@ import Control.Monad (forM, forM_, when)
 import Data.Aeson (eitherDecodeStrict, encode)
 import Data.ByteString.Lazy (toStrict)
 import Data.Int (Int64)
-import Data.Word (Word64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
+import Data.Word (Word64)
 import Database.SQLite.Simple
 import Deriving.Aeson
 import GHC.Natural (Natural)
 import GeniusYield.Types (GYAddress, LowerFirst)
 import ZkFold.Cardano.Rollup.Aggregator.Types
-import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
@@ -57,7 +56,7 @@ import ZkFold.Symbolic.Ledger.Types
 -- Full preimages are stored separately in the @utxo_preimages@ table.
 data PersistedState = PersistedState
   { psLedgerState ∷ !(State I)
-  , psLeafHashes  ∷ !(Leaves Ud (FieldElement I))
+  , psLeafHashes ∷ !(Leaves Ud (FieldElement I))
   }
   deriving stock Generic
   deriving (FromJSON, ToJSON) via CustomJSON '[FieldLabelModifier '[StripPrefix "ps", LowerFirst]] PersistedState
@@ -254,7 +253,7 @@ getPendingTxsDb dbPath = withConn dbPath $ \conn → do
     query_
       conn
       "SELECT id, tx_hash, payload, status, batch_id, submitted_at FROM txs WHERE status='pending' ORDER BY id"
-  return (catMaybes (map parseTxRow rows))
+  return (mapMaybe parseTxRow rows)
 
 -- | Return all pending transactions with their database IDs and parsed payloads.
 getPendingTxsWithIdsDb ∷ FilePath → IO [(Int64, QueuedTx)]
@@ -263,9 +262,13 @@ getPendingTxsWithIdsDb dbPath = withConn dbPath $ \conn → do
     query_
       conn
       "SELECT id, payload FROM txs WHERE status='pending' ORDER BY id"
-  return $ catMaybes $ map (\(tid, payload) → case eitherDecodeStrict (encodeUtf8 payload) of
-    Right qtx → Just (tid, qtx)
-    Left _ → Nothing) rows
+  return $
+    mapMaybe
+      ( \(tid, payload) → case eitherDecodeStrict (encodeUtf8 payload) of
+          Right qtx → Just (tid, qtx)
+          Left _ → Nothing
+      )
+      rows
 
 -- | Mark specific transactions as 'failed'.
 failTxsDb ∷ FilePath → [Int64] → IO ()
@@ -288,7 +291,7 @@ getTxsByAddressDb dbPath l2addr limit offset = withConn dbPath $ \conn → do
       \WHERE id IN (SELECT DISTINCT tx_id FROM tx_addresses WHERE l2_address=?) \
       \ORDER BY id DESC LIMIT ? OFFSET ?"
       (l2addr, fromIntegral limit ∷ Int, fromIntegral offset ∷ Int)
-  return (catMaybes (map parseTxRow rows))
+  return (mapMaybe parseTxRow rows)
 
 -- | Paginated batch list, newest first.
 getBatchesDb ∷ FilePath → Natural → Natural → IO [BatchRecord]
@@ -298,7 +301,7 @@ getBatchesDb dbPath limit offset = withConn dbPath $ \conn → do
       conn
       "SELECT id, l1_tx_id, created_at, tx_count FROM batches ORDER BY id DESC LIMIT ? OFFSET ?"
       (fromIntegral limit ∷ Int, fromIntegral offset ∷ Int)
-  return (catMaybes (map parseBatchRow rows))
+  return (mapMaybe parseBatchRow rows)
 
 -- | Look up a batch by id together with all its transactions.
 getBatchByIdDb ∷ FilePath → Int64 → IO (Maybe (BatchRecord, [TxRecord]))
@@ -317,7 +320,7 @@ getBatchByIdDb dbPath batchId = withConn dbPath $ \conn → do
             conn
             "SELECT id, tx_hash, payload, status, batch_id, submitted_at FROM txs WHERE batch_id=? ORDER BY id"
             (Only batchId)
-        let txs = catMaybes (map parseTxRow txRows)
+        let txs = mapMaybe parseTxRow txRows
         return (Just (br, txs))
     _ → return Nothing
 
@@ -330,14 +333,12 @@ getPendingBridgeOutsDb dbPath targetAddr = withConn dbPath $ \conn → do
       conn
       "SELECT id, tx_hash, payload, status, batch_id, submitted_at \
       \FROM txs WHERE status IN ('pending', 'batched') ORDER BY id"
-  let allTxs = catMaybes (map parseTxRow rows)
+  let allTxs = mapMaybe parseTxRow rows
   return $ do
     tr ← allTxs
     let qtx = trPayload tr
     (val, addr) ← qtBridgeOuts qtx
-    if addr == targetAddr
-      then [BridgeOutEntry {boeTxHash = trHash tr, boeValue = val, boeStatus = trStatus tr}]
-      else []
+    ([BridgeOutEntry {boeTxHash = trHash tr, boeValue = val, boeStatus = trStatus tr} | addr == targetAddr])
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -447,7 +448,7 @@ loadStateHistory ∷ FilePath → IO [(Word64, State I, Leaves Ud (FieldElement 
 loadStateHistory dbPath = withConn dbPath $ \conn → do
   rows ∷ [(Word64, Text, Text)] ←
     query_ conn "SELECT slot_no, ledger_state, leaf_hashes FROM state_history ORDER BY slot_no DESC LIMIT 20"
-  pure $ catMaybes $ map decodeRow rows
+  pure $ mapMaybe decodeRow rows
  where
   decodeRow (slotNo, stText, lhText) =
     case (eitherDecodeStrict (encodeUtf8 stText), eitherDecodeStrict (encodeUtf8 lhText)) of
