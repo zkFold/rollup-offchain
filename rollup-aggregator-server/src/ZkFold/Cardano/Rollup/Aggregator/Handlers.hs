@@ -23,10 +23,10 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
 ) where
 
 import Control.Exception (throwIO)
-import Data.Aeson qualified
 import Data.Aeson (encode)
 import Data.Bifunctor (Bifunctor (..))
 import Data.ByteString.Lazy (toStrict)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
@@ -62,7 +62,6 @@ import ZkFold.Cardano.Rollup.Aggregator.Ctx (
   Ctx (..),
   runSkeletonI,
  )
-import Data.Map.Strict qualified as Map
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   PersistedState (..),
   getBatchByIdDb,
@@ -75,6 +74,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   lookupPreimagesDb,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types (
+  A,
   BatchDetailResponse (..),
   BatchesResponse (..),
   BridgeInRequest (..),
@@ -102,9 +102,8 @@ import ZkFold.Cardano.Rollup.Api
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.Bool (fromBool)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
-import ZkFold.Cardano.Rollup.Aggregator.Types (A, Ud)
 import ZkFold.Symbolic.Ledger.Types (nullUTxOHash)
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..), UTxO (..))
 import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
 
