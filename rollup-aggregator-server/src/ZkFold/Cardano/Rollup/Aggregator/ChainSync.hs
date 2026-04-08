@@ -3,7 +3,7 @@
 -- Connects to a local Cardano node via the Ouroboros ChainSync mini-protocol.
 -- ChainSync is the **single source of truth** for the Merkle tree and rollup
 -- state. It maintains the tree leaf hashes from on-chain deltas and handles
--- rollbacks via an in-memory state history (up to 20 snapshots).
+-- rollbacks via a state history (up to 20 snapshots, persisted to SQLite).
 --
 -- The Batcher communicates preimage data (full UTxO objects for leaf hashes it
 -- created) via the @utxo_preimages@ SQLite table — an append-only store keyed
@@ -41,7 +41,7 @@ import PlutusTx qualified
 import ZkFold.Algebra.Class (FromConstant (..))
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (saveState)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (pruneStateHistory, saveState, saveStateHistory)
 import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
@@ -125,8 +125,9 @@ chainSyncClient ctx bs =
 -- | Process a new block: scan for rollup state updates.
 -- ChainSync is the single writer for the Merkle tree and state TVars.
 handleRollForward ∷ Ctx → BatcherState → Api.BlockInMode → IO ()
-handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra (Api.Block header txs)) = do
-  let Api.BlockHeader (Api.SlotNo slot) _ _ = header
+handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra block) = do
+  let Api.BlockHeader (Api.SlotNo slot) _ _ = Api.getBlockHeader block
+      txs = Api.getBlockTxs block
       nft = zkirbiNFT (ctxRollupBuildInfo ctx)
       updates = mapMaybe (findRollupUpdate nft) txs
   forM_ updates $ \RollupStateUpdate {..} → do
@@ -171,6 +172,12 @@ handleRollback ctx bs point = do
         writeTVar (bsLeafHashesVar bs) initLH
         writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves initLH)
         writeTVar (bsStateHistoryVar bs) []
+  -- Keep DB history in sync: remove snapshots newer than the rollback target.
+  pruneStateHistory (ctxDbPath ctx) targetSlot
+  -- Persist the restored state so a crash after rollback doesn't lose it.
+  restoredState ← readTVarIO (bsLedgerStateVar bs)
+  restoredLeaves ← readTVarIO (bsLeafHashesVar bs)
+  saveState (ctxDbPath ctx) restoredState restoredLeaves
 
 -- | Scan a single transaction for a rollup state update.
 -- Returns 'Just' if the transaction produces an output with the rollup NFT.
@@ -267,6 +274,8 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
 
   -- Persist to SQLite for crash recovery.
   saveState (ctxDbPath ctx) newState newLeafHashes
+  -- Persist rollback snapshot so history survives restarts.
+  saveStateHistory (ctxDbPath ctx) slot currentState currentLeafHashes
   gyLogInfo (ctxProviders ctx) mempty $
     "Chain sync: state updated, " <> show (length modifiedLeaves) <> " leaf positions modified"
 

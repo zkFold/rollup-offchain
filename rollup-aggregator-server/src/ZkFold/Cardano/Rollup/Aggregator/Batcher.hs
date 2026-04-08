@@ -75,6 +75,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   failTxsDb,
   getPendingTxsWithIdsDb,
   loadState,
+  loadStateHistory,
   lookupPreimagesByRefDb,
   lookupPreimagesDb,
   recordBatchDb,
@@ -127,7 +128,7 @@ data BatcherState = BatcherState
   , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A S N TxCount)
   , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
   , bsStateHistoryVar ∷ !(TVar [(Word64, State I, Leaves Ud (FieldElement I))])
-  -- ^ In-memory state history for rollback recovery. Written by ChainSync.
+  -- ^ State history for rollback recovery. Written by ChainSync, persisted to SQLite.
   -- Each entry is (slotNo, state, leafHashes). Most recent first, capped at 20.
   }
 
@@ -144,7 +145,8 @@ initBatcherState dbPath = do
   stateVar ← newTVarIO initSt
   leafHashesVar ← newTVarIO initLH
   treeVar ← newTVarIO initTree
-  historyVar ← newTVarIO []
+  history ← loadStateHistory dbPath
+  historyVar ← newTVarIO history
   ts ← powersOfTauSubset
   let circuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
