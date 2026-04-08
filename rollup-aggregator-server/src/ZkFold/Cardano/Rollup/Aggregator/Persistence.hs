@@ -17,6 +17,9 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   getPendingBridgeOutsDb,
   saveState,
   loadState,
+  saveStateHistory,
+  loadStateHistory,
+  pruneStateHistory,
   savePreimagesDb,
   lookupPreimagesDb,
   lookupPreimagesByRefDb,
@@ -29,6 +32,7 @@ import Control.Monad (forM, forM_, when)
 import Data.Aeson (eitherDecodeStrict, encode)
 import Data.ByteString.Lazy (toStrict)
 import Data.Int (Int64)
+import Data.Word (Word64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
@@ -123,6 +127,14 @@ initDb dbPath = withConn dbPath $ \conn → do
   execute_
     conn
     "CREATE INDEX IF NOT EXISTS idx_preimage_ref ON utxo_preimages(output_ref)"
+  -- Rollback history: persists up to 20 state snapshots so rollback recovery
+  -- survives process restarts.
+  execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS state_history \
+    \(slot_no INTEGER PRIMARY KEY, \
+    \ledger_state TEXT NOT NULL, \
+    \leaf_hashes TEXT NOT NULL)"
 
 -- | Enqueue a single transaction. Computes SHA256 of the JSON payload as the
 -- transaction hash, stores L2 addresses for indexed lookup, and returns the hash.
@@ -411,6 +423,44 @@ loadState dbPath = withConn dbPath $ \conn → do
                   return (Just (PersistedState st (fmap (hHash . hash) preimage)))
                 Left _ → return Nothing
     _ → return Nothing
+
+-- ---------------------------------------------------------------------------
+-- Rollback history persistence
+-- ---------------------------------------------------------------------------
+
+-- | Persist a single state snapshot for rollback recovery, and prune to 20 entries.
+saveStateHistory ∷ FilePath → Word64 → State I → Leaves Ud (FieldElement I) → IO ()
+saveStateHistory dbPath slotNo ledgerState leafHashes = withConn dbPath $ \conn → do
+  execute
+    conn
+    "INSERT OR REPLACE INTO state_history (slot_no, ledger_state, leaf_hashes) VALUES (?, ?, ?)"
+    (slotNo, toText ledgerState, toText leafHashes)
+  -- Cap at 20 entries.
+  execute_
+    conn
+    "DELETE FROM state_history WHERE slot_no NOT IN \
+    \(SELECT slot_no FROM state_history ORDER BY slot_no DESC LIMIT 20)"
+ where
+  toText ∷ ToJSON a ⇒ a → Text
+  toText = decodeUtf8 . toStrict . encode
+
+-- | Load persisted state history, most recent first (matching TVar ordering).
+loadStateHistory ∷ FilePath → IO [(Word64, State I, Leaves Ud (FieldElement I))]
+loadStateHistory dbPath = withConn dbPath $ \conn → do
+  rows ∷ [(Word64, Text, Text)] ←
+    query_ conn "SELECT slot_no, ledger_state, leaf_hashes FROM state_history ORDER BY slot_no DESC LIMIT 20"
+  pure $ catMaybes $ map decodeRow rows
+ where
+  decodeRow (slotNo, stText, lhText) =
+    case (eitherDecodeStrict (encodeUtf8 stText), eitherDecodeStrict (encodeUtf8 lhText)) of
+      (Right st, Right lh) → Just (slotNo, st, lh)
+      _ → Nothing
+
+-- | Delete all history snapshots newer than the target slot.
+-- Called after a rollback to keep the DB in sync with the TVar.
+pruneStateHistory ∷ FilePath → Word64 → IO ()
+pruneStateHistory dbPath targetSlot = withConn dbPath $ \conn →
+  execute conn "DELETE FROM state_history WHERE slot_no > ?" (Only targetSlot)
 
 -- ---------------------------------------------------------------------------
 -- Preimage DB: hash → UTxO mapping
