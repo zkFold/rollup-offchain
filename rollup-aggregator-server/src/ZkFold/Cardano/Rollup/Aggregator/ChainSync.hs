@@ -190,7 +190,7 @@ findRollupUpdate (GYNonAdaToken nftMP nftTN) (Api.Tx txBody _) =
 
       -- Pattern match on ShelleyTxBody to access outputs and script data.
       Api.S.ShelleyTxBody _sbe _ledgerBody _scripts scriptData _mAux _sv = txBody
-      Api.TxBody content = txBody
+      content = Api.getTxBodyContent txBody
       txOuts = Api.txOuts content
 
       -- Find the output carrying the NFT.
