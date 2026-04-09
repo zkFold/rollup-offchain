@@ -190,19 +190,53 @@ handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra block) = do
         onChainLen = chainLength rsuNewRollupState
         onChainRoot = utxoTreeRoot rsuNewRollupState
         localRoot = feToInteger (sUTxO currentState)
-    -- Process this update if it advances beyond our current state,
-    -- or if it represents a different state at the same length (fork).
-    -- During replay from genesis, old blocks (onChainLen <= localChainLen
-    -- with matching root) are skipped because the loaded state already
-    -- reflects them.
-    when (onChainLen > localChainLen || (onChainLen == localChainLen && onChainRoot /= localRoot)) $ do
-      gyLogInfo (ctxProviders ctx) mempty $
-        "Chain sync: applying state update (chain len " <> show localChainLen
-          <> " → " <> show onChainLen <> ", slot " <> show slot <> ")"
-      applyRollupUpdate ctx bs slot rsuNewRollupState rsuDelta
+        isNext = onChainLen == localChainLen + 1
+        isFork = onChainLen == localChainLen && onChainRoot /= localRoot
+        isAlreadySeen = onChainLen <= localChainLen && onChainRoot == localRoot
+        isGap = onChainLen > localChainLen + 1
+    if
+      | isNext || isFork → do
+          gyLogInfo (ctxProviders ctx) mempty $
+            "Chain sync: applying state update (chain len " <> show localChainLen
+              <> " → " <> show onChainLen <> ", slot " <> show slot <> ")"
+          applyRollupUpdate ctx bs slot rsuNewRollupState rsuDelta
+      | isAlreadySeen → pure () -- Replay after restart, already processed.
+      | isGap → do
+          -- State discontinuity: we missed update(s). This means our persisted
+          -- state is inconsistent with the chain. Reset to genesis and restart
+          -- chain sync so it replays all blocks in order.
+          gyLogWarning (ctxProviders ctx) mempty $
+            "Chain sync: state discontinuity detected (local len "
+              <> show localChainLen <> ", on-chain len " <> show onChainLen
+              <> "). Resetting to genesis and resyncing."
+          resetToGenesis ctx bs
+          throwIO $ userError "Chain sync: state discontinuity, resyncing from genesis"
+      | otherwise → do
+          -- Unexpected: onChainLen < localChainLen but roots differ.
+          -- Could be a deep fork. Reset to be safe.
+          gyLogWarning (ctxProviders ctx) mempty $
+            "Chain sync: unexpected state mismatch (local len "
+              <> show localChainLen <> " root " <> show localRoot
+              <> ", on-chain len " <> show onChainLen <> " root " <> show onChainRoot
+              <> "). Resetting to genesis and resyncing."
+          resetToGenesis ctx bs
+          throwIO $ userError "Chain sync: unexpected state mismatch, resyncing from genesis"
 handleRollForward _ _ _ = pure () -- Ignore non-Conway blocks.
 
--- | Handle a chain rollback by restoring from the in-memory state history.
+-- | Reset all state to genesis (initial state, empty tree, empty history).
+-- Persists the reset to SQLite so it survives a crash.
+resetToGenesis ∷ Ctx → BatcherState → IO ()
+resetToGenesis ctx bs = do
+  let initLH = pure (nullUTxOHash @A @I)
+  atomically $ do
+    writeTVar (bsLedgerStateVar bs) initialState
+    writeTVar (bsLeafHashesVar bs) initLH
+    writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves initLH)
+    writeTVar (bsStateHistoryVar bs) []
+  pruneStateHistory (ctxDbPath ctx) 0
+  saveState (ctxDbPath ctx) initialState initLH
+
+-- | Handle a chain rollback by restoring from the state history.
 handleRollback ∷ Ctx → BatcherState → Api.ChainPoint → IO ()
 handleRollback ctx bs point = do
   let targetSlot = case point of
@@ -210,28 +244,26 @@ handleRollback ctx bs point = do
         Api.ChainPoint (Api.SlotNo s) _ → s
   gyLogWarning (ctxProviders ctx) mempty $
     "Chain sync: rollback to slot " <> show targetSlot
-  atomically $ do
-    history ← readTVar (bsStateHistoryVar bs)
-    -- Find the most recent snapshot at or before the target slot.
-    case dropWhile (\(s, _, _) → s > targetSlot) history of
-      ((_, st, lh) : rest) → do
+  history ← readTVarIO (bsStateHistoryVar bs)
+  -- Find the most recent snapshot at or before the target slot.
+  case dropWhile (\(s, _, _) → s > targetSlot) history of
+    ((_, st, lh) : rest) → do
+      atomically $ do
         writeTVar (bsLedgerStateVar bs) st
         writeTVar (bsLeafHashesVar bs) lh
         writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves lh)
         writeTVar (bsStateHistoryVar bs) rest
-      [] → do
-        -- No snapshot covers this slot; reset to initial state.
-        let initLH = pure (nullUTxOHash @A @I)
-        writeTVar (bsLedgerStateVar bs) initialState
-        writeTVar (bsLeafHashesVar bs) initLH
-        writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves initLH)
-        writeTVar (bsStateHistoryVar bs) []
-  -- Keep DB history in sync: remove snapshots newer than the rollback target.
-  pruneStateHistory (ctxDbPath ctx) targetSlot
-  -- Persist the restored state so a crash after rollback doesn't lose it.
-  restoredState ← readTVarIO (bsLedgerStateVar bs)
-  restoredLeaves ← readTVarIO (bsLeafHashesVar bs)
-  saveState (ctxDbPath ctx) restoredState restoredLeaves
+      -- Keep DB history in sync: remove snapshots newer than the rollback target.
+      pruneStateHistory (ctxDbPath ctx) targetSlot
+      -- Persist the restored state so a crash after rollback doesn't lose it.
+      saveState (ctxDbPath ctx) st lh
+    [] → do
+      -- No snapshot covers this slot; reset to genesis and restart chain sync
+      -- so it replays all blocks from the beginning.
+      gyLogWarning (ctxProviders ctx) mempty $
+        "Chain sync: rollback beyond history depth, resetting to genesis and resyncing"
+      resetToGenesis ctx bs
+      throwIO $ userError "Chain sync: rollback beyond history, resyncing from genesis"
 
 -- | Scan a single transaction for a rollup state update.
 -- Returns 'Just' if the transaction produces an output with the rollup NFT.
