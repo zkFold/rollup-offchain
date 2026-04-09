@@ -60,6 +60,12 @@ data RollupStateUpdate = RollupStateUpdate
   , rsuDelta ∷ ![Integer]
   }
 
+-- | Mutable retry state shared between the sync loop and protocol callbacks.
+data RetryState = RetryState
+  { rsBackoffMicros ∷ !(IORef Int)
+  , rsConsecFailures ∷ !(IORef Int)
+  }
+
 -- | Start the chain sync client as a background thread.
 -- Returns the async handle (linked to the calling thread so exceptions propagate).
 startChainSync
@@ -70,8 +76,8 @@ startChainSync
   → IO (Async.Async ())
 startChainSync ctx bs socketPath = do
   let connInfo = networkIdToLocalNodeConnectInfo (ctxNetworkId ctx) socketPath
-  backoffRef ← newIORef initialBackoffMicros
-  a ← Async.async $ chainSyncLoop ctx bs connInfo backoffRef
+  rs ← RetryState <$> newIORef initialBackoffMicros <*> newIORef 0
+  a ← Async.async $ chainSyncLoop ctx bs connInfo rs
   Async.link a
   pure a
 
@@ -80,32 +86,49 @@ initialBackoffMicros, maxBackoffMicros ∷ Int
 initialBackoffMicros = 5_000_000 -- 5 seconds
 maxBackoffMicros = 300_000_000 -- 5 minutes
 
+-- | Maximum consecutive failures before giving up and letting the exception
+-- propagate (crashing the process so the process manager can restart it).
+maxConsecFailures ∷ Int
+maxConsecFailures = 5
+
 -- | The chain sync loop. Reconnects on recoverable failure with exponential backoff.
--- Async exceptions (e.g. from 'Async.link' or graceful shutdown) are re-thrown
--- immediately so the process can exit cleanly.
-chainSyncLoop ∷ Ctx → BatcherState → Api.LocalNodeConnectInfo → IORef Int → IO ()
-chainSyncLoop ctx bs connInfo backoffRef = do
+--
+-- Re-throws immediately on:
+--   * Async exceptions (ThreadKilled, cancel, linked exceptions) — so that
+--     'Async.link' and graceful shutdown work correctly.
+--   * More than 'maxConsecFailures' consecutive failures without a single
+--     successful block — likely a permanent error (logic bug, DB corruption).
+chainSyncLoop ∷ Ctx → BatcherState → Api.LocalNodeConnectInfo → RetryState → IO ()
+chainSyncLoop ctx bs connInfo rs = do
   gyLogInfo (ctxProviders ctx) mempty "Chain sync: connecting to local node"
   Api.connectToLocalNode connInfo protocols
     `catch` \(e ∷ SomeException) →
-      -- Re-throw async exceptions (ThreadKilled, cancel, linked exceptions)
-      -- so that Async.link and graceful shutdown work correctly.
+      -- Re-throw async exceptions (ThreadKilled, cancel, linked exceptions).
       case fromException @SomeAsyncException e of
         Just _ → throwIO e
         Nothing → do
-          backoff ← readIORef backoffRef
-          let backoffSecs = backoff `div` 1_000_000
-          gyLogError (ctxProviders ctx) mempty $
-            "Chain sync: connection error: " <> show e
-              <> ", reconnecting in " <> show backoffSecs <> "s"
-          threadDelay backoff
-          -- Exponential backoff: double up to the cap.
-          writeIORef backoffRef (min maxBackoffMicros (backoff * 2))
-          chainSyncLoop ctx bs connInfo backoffRef
+          failures ← readIORef (rsConsecFailures rs)
+          let failures' = failures + 1
+          writeIORef (rsConsecFailures rs) failures'
+          if failures' >= maxConsecFailures
+            then do
+              gyLogError (ctxProviders ctx) mempty $
+                "Chain sync: " <> show failures' <> " consecutive failures, giving up. "
+                  <> "Last error: " <> show e
+              throwIO e
+            else do
+              backoff ← readIORef (rsBackoffMicros rs)
+              let backoffSecs = backoff `div` 1_000_000
+              gyLogError (ctxProviders ctx) mempty $
+                "Chain sync: error (" <> show failures' <> "/" <> show maxConsecFailures <> "): "
+                  <> show e <> ", reconnecting in " <> show backoffSecs <> "s"
+              threadDelay backoff
+              writeIORef (rsBackoffMicros rs) (min maxBackoffMicros (backoff * 2))
+              chainSyncLoop ctx bs connInfo rs
  where
   protocols =
     Api.LocalNodeClientProtocols
-      { localChainSyncClient = Api.LocalChainSyncClient $ chainSyncClient ctx bs backoffRef
+      { localChainSyncClient = Api.LocalChainSyncClient $ chainSyncClient ctx bs rs
       , localTxSubmissionClient = Nothing
       , localStateQueryClient = Nothing
       , localTxMonitoringClient = Nothing
@@ -116,18 +139,18 @@ chainSyncLoop ctx bs connInfo backoffRef = do
 chainSyncClient
   ∷ Ctx
   → BatcherState
-  → IORef Int
-  -- ^ Backoff ref — reset to initial on successful block processing.
+  → RetryState
   → Api.ChainSyncClient Api.BlockInMode Api.ChainPoint Api.ChainTip IO ()
-chainSyncClient ctx bs backoffRef =
+chainSyncClient ctx bs rs =
   Api.ChainSyncClient $ pure initialise
  where
-  -- | Bump the liveness timestamp and reset backoff after successful processing.
+  -- | Bump the liveness timestamp and reset retry state after successful processing.
   touch ∷ IO ()
   touch = do
     now ← getCurrentTime
     atomically $ writeTVar (bsChainSyncAliveVar bs) now
-    writeIORef backoffRef initialBackoffMicros
+    writeIORef (rsBackoffMicros rs) initialBackoffMicros
+    writeIORef (rsConsecFailures rs) 0
 
   initialise =
     Api.Sync.SendMsgFindIntersect [Api.ChainPointAtGenesis] $
