@@ -21,7 +21,7 @@ import Cardano.Ledger.Plutus.Data qualified as Ledger
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, readTVar, readTVarIO, writeTVar)
-import Control.Exception (AsyncException, SomeException, catch, fromException, throwIO)
+import Control.Exception (SomeAsyncException, SomeException, catch, fromException, throwIO)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Time.Clock (getCurrentTime)
 import Control.Lens ((^.))
@@ -90,7 +90,7 @@ chainSyncLoop ctx bs connInfo backoffRef = do
     `catch` \(e ∷ SomeException) →
       -- Re-throw async exceptions (ThreadKilled, cancel, linked exceptions)
       -- so that Async.link and graceful shutdown work correctly.
-      case fromException @AsyncException e of
+      case fromException @SomeAsyncException e of
         Just _ → throwIO e
         Nothing → do
           backoff ← readIORef backoffRef
