@@ -104,9 +104,9 @@ startChainSync ctx bs socketPath = do
           gyLogInfo (ctxProviders ctx) mempty $
             "Chain sync: resuming from checkpoint at slot " <> show slotNo
           pure $ Api.ChainPoint (Api.SlotNo slotNo) blockHash
-        Left _ → do
-          gyLogWarning (ctxProviders ctx) mempty
-            "Chain sync: failed to decode persisted checkpoint, starting from genesis"
+        Left err → do
+          gyLogWarning (ctxProviders ctx) mempty $
+            "Chain sync: failed to decode persisted checkpoint: " <> show err <> ", starting from genesis"
           pure Api.ChainPointAtGenesis
     Nothing → pure Api.ChainPointAtGenesis
   checkpointRef ← newIORef resumePoint
