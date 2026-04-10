@@ -25,7 +25,7 @@ import Control.Exception (SomeAsyncException, SomeException, catch, fromExceptio
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Time.Clock (getCurrentTime)
 import Control.Lens ((^.))
-import Control.Monad (forM_, when)
+import Control.Monad (forM_)
 import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe, fromMaybe)
@@ -43,7 +43,9 @@ import PlutusTx qualified
 import ZkFold.Algebra.Class (FromConstant (..))
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (pruneStateHistory, saveState, saveStateHistory)
+import Data.Proxy (Proxy (..))
+import Data.Text.Encoding qualified as Text
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (clearCheckpoint, loadCheckpoint, pruneStateHistory, saveCheckpoint, saveState, saveStateHistory)
 import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
@@ -77,7 +79,22 @@ startChainSync
 startChainSync ctx bs socketPath = do
   let connInfo = networkIdToLocalNodeConnectInfo (ctxNetworkId ctx) socketPath
   rs ← RetryState <$> newIORef initialBackoffMicros <*> newIORef 0
-  a ← Async.async $ chainSyncLoop ctx bs connInfo rs
+  -- Load persisted checkpoint for resuming chain sync after restart.
+  mCheckpoint ← loadCheckpoint (ctxDbPath ctx)
+  resumePoint ← case mCheckpoint of
+    Just (slotNo, hashHex) →
+      case Api.deserialiseFromRawBytesHex (Api.AsHash (Api.proxyToAsType (Proxy @Api.BlockHeader))) (Text.encodeUtf8 hashHex) of
+        Right blockHash → do
+          gyLogInfo (ctxProviders ctx) mempty $
+            "Chain sync: resuming from checkpoint at slot " <> show slotNo
+          pure $ Api.ChainPoint (Api.SlotNo slotNo) blockHash
+        Left _ → do
+          gyLogWarning (ctxProviders ctx) mempty
+            "Chain sync: failed to decode persisted checkpoint, starting from genesis"
+          pure Api.ChainPointAtGenesis
+    Nothing → pure Api.ChainPointAtGenesis
+  checkpointRef ← newIORef resumePoint
+  a ← Async.async $ chainSyncLoop ctx bs connInfo rs checkpointRef
   Async.link a
   pure a
 
@@ -98,8 +115,8 @@ maxConsecFailures = 5
 --     'Async.link' and graceful shutdown work correctly.
 --   * More than 'maxConsecFailures' consecutive failures without a single
 --     successful block — likely a permanent error (logic bug, DB corruption).
-chainSyncLoop ∷ Ctx → BatcherState → Api.LocalNodeConnectInfo → RetryState → IO ()
-chainSyncLoop ctx bs connInfo rs = do
+chainSyncLoop ∷ Ctx → BatcherState → Api.LocalNodeConnectInfo → RetryState → IORef Api.ChainPoint → IO ()
+chainSyncLoop ctx bs connInfo rs checkpointRef = do
   gyLogInfo (ctxProviders ctx) mempty "Chain sync: connecting to local node"
   Api.connectToLocalNode connInfo protocols
     `catch` \(e ∷ SomeException) →
@@ -124,25 +141,32 @@ chainSyncLoop ctx bs connInfo rs = do
                   <> show e <> ", reconnecting in " <> show backoffSecs <> "s"
               threadDelay backoff
               writeIORef (rsBackoffMicros rs) (min maxBackoffMicros (backoff * 2))
-              chainSyncLoop ctx bs connInfo rs
+              chainSyncLoop ctx bs connInfo rs checkpointRef
  where
   protocols =
     Api.LocalNodeClientProtocols
-      { localChainSyncClient = Api.LocalChainSyncClient $ chainSyncClient ctx bs rs
+      { localChainSyncClient = Api.LocalChainSyncClient $ chainSyncClient ctx bs rs checkpointRef
       , localTxSubmissionClient = Nothing
       , localStateQueryClient = Nothing
       , localTxMonitoringClient = Nothing
       }
 
 -- | The ChainSync protocol client.
--- Starts from genesis (or a resume point) and processes each block.
+-- Starts from a persisted checkpoint (or genesis on first run).
+-- On reconnect, reads the latest checkpoint from the IORef.
 chainSyncClient
   ∷ Ctx
   → BatcherState
   → RetryState
+  → IORef Api.ChainPoint
   → Api.ChainSyncClient Api.BlockInMode Api.ChainPoint Api.ChainTip IO ()
-chainSyncClient ctx bs rs =
-  Api.ChainSyncClient $ pure initialise
+chainSyncClient ctx bs rs checkpointRef =
+  Api.ChainSyncClient $ do
+    resumePoint ← readIORef checkpointRef
+    let intersectPoints = case resumePoint of
+          Api.ChainPointAtGenesis → [Api.ChainPointAtGenesis]
+          cp → [cp, Api.ChainPointAtGenesis] -- Fall back to genesis if checkpoint not on chain.
+    pure (initialise intersectPoints)
  where
   -- | Bump the liveness timestamp and reset retry state after successful processing.
   touch ∷ IO ()
@@ -152,13 +176,17 @@ chainSyncClient ctx bs rs =
     writeIORef (rsBackoffMicros rs) initialBackoffMicros
     writeIORef (rsConsecFailures rs) 0
 
-  initialise =
-    Api.Sync.SendMsgFindIntersect [Api.ChainPointAtGenesis] $
+  initialise intersectPoints =
+    Api.Sync.SendMsgFindIntersect intersectPoints $
       Api.Sync.ClientStIntersect
-        { Api.Sync.recvMsgIntersectFound = \_point _tip →
-            Api.ChainSyncClient $ pure requestNext
-        , Api.Sync.recvMsgIntersectNotFound = \_tip →
-            Api.ChainSyncClient $ pure requestNext
+        { Api.Sync.recvMsgIntersectFound = \point _tip → Api.ChainSyncClient $ do
+            gyLogInfo (ctxProviders ctx) mempty $
+              "Chain sync: intersection found at " <> show point
+            pure requestNext
+        , Api.Sync.recvMsgIntersectNotFound = \_tip → Api.ChainSyncClient $ do
+            gyLogWarning (ctxProviders ctx) mempty
+              "Chain sync: no intersection found, syncing from genesis"
+            pure requestNext
         }
 
   requestNext =
@@ -167,7 +195,7 @@ chainSyncClient ctx bs rs =
   handleNext =
     Api.Sync.ClientStNext
       { Api.Sync.recvMsgRollForward = \block _tip → Api.ChainSyncClient $ do
-          handleRollForward ctx bs block
+          handleRollForward ctx bs checkpointRef block
           touch
           pure requestNext
       , Api.Sync.recvMsgRollBackward = \point _tip → Api.ChainSyncClient $ do
@@ -178,9 +206,9 @@ chainSyncClient ctx bs rs =
 
 -- | Process a new block: scan for rollup state updates.
 -- ChainSync is the single writer for the Merkle tree and state TVars.
-handleRollForward ∷ Ctx → BatcherState → Api.BlockInMode → IO ()
-handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra block) = do
-  let Api.BlockHeader (Api.SlotNo slot) _ _ = Api.getBlockHeader block
+handleRollForward ∷ Ctx → BatcherState → IORef Api.ChainPoint → Api.BlockInMode → IO ()
+handleRollForward ctx bs checkpointRef (Api.BlockInMode Api.ConwayEra block) = do
+  let Api.BlockHeader (Api.SlotNo slot) blockHash _ = Api.getBlockHeader block
       txs = Api.getBlockTxs block
       nft = zkirbiNFT (ctxRollupBuildInfo ctx)
       updates = mapMaybe (findRollupUpdate nft) txs
@@ -200,6 +228,11 @@ handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra block) = do
             "Chain sync: applying state update (chain len " <> show localChainLen
               <> " → " <> show onChainLen <> ", slot " <> show slot <> ")"
           applyRollupUpdate ctx bs slot rsuNewRollupState rsuDelta
+          -- Save checkpoint so restarts skip already-processed blocks.
+          let hashHex = Text.decodeLatin1 (Api.serialiseToRawBytesHex blockHash)
+              cp = Api.ChainPoint (Api.SlotNo slot) blockHash
+          saveCheckpoint (ctxDbPath ctx) slot hashHex
+          writeIORef checkpointRef cp
       | isAlreadySeen → pure () -- Replay after restart, already processed.
       | isGap → do
           -- State discontinuity: we missed update(s). This means our persisted
@@ -221,7 +254,7 @@ handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra block) = do
               <> "). Resetting to genesis and resyncing."
           resetToGenesis ctx bs
           throwIO $ userError "Chain sync: unexpected state mismatch, resyncing from genesis"
-handleRollForward _ _ _ = pure () -- Ignore non-Conway blocks.
+handleRollForward _ _ _ _ = pure () -- Ignore non-Conway blocks.
 
 -- | Reset all state to genesis (initial state, empty tree, empty history).
 -- Persists the reset to SQLite so it survives a crash.
@@ -234,6 +267,7 @@ resetToGenesis ctx bs = do
     writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves initLH)
     writeTVar (bsStateHistoryVar bs) []
   pruneStateHistory (ctxDbPath ctx) 0
+  clearCheckpoint (ctxDbPath ctx)
   saveState (ctxDbPath ctx) initialState initLH
 
 -- | Handle a chain rollback by restoring from the state history.

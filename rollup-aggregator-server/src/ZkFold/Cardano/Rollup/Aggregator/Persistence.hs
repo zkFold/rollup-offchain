@@ -20,6 +20,9 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   saveStateHistory,
   loadStateHistory,
   pruneStateHistory,
+  saveCheckpoint,
+  loadCheckpoint,
+  clearCheckpoint,
   savePreimagesDb,
   lookupPreimagesDb,
   lookupPreimagesByRefDb,
@@ -132,6 +135,13 @@ initDb dbPath = withConn dbPath $ \conn → do
     \(slot_no INTEGER PRIMARY KEY, \
     \ledger_state TEXT NOT NULL, \
     \leaf_hashes TEXT NOT NULL)"
+  -- Chain sync checkpoint: resume point for avoiding full replay from genesis.
+  execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS chain_checkpoint \
+    \(id INTEGER PRIMARY KEY CHECK (id = 1), \
+    \slot_no INTEGER NOT NULL, \
+    \block_hash TEXT NOT NULL)"
 
 -- | Enqueue a single transaction. Computes SHA256 of the JSON payload as the
 -- transaction hash, stores L2 addresses for indexed lookup, and returns the hash.
@@ -460,6 +470,33 @@ loadStateHistory dbPath = withConn dbPath $ \conn → do
 pruneStateHistory ∷ FilePath → Word64 → IO ()
 pruneStateHistory dbPath targetSlot = withConn dbPath $ \conn →
   execute conn "DELETE FROM state_history WHERE slot_no > ?" (Only targetSlot)
+
+-- ---------------------------------------------------------------------------
+-- Chain sync checkpoint
+-- ---------------------------------------------------------------------------
+
+-- | Persist the chain sync resume point (slot + hex-encoded block hash).
+-- Called after each rollup state update so restarts skip already-processed blocks.
+saveCheckpoint ∷ FilePath → Word64 → Text → IO ()
+saveCheckpoint dbPath slotNo blockHash = withConn dbPath $ \conn →
+  execute
+    conn
+    "INSERT OR REPLACE INTO chain_checkpoint (id, slot_no, block_hash) VALUES (1, ?, ?)"
+    (slotNo, blockHash)
+
+-- | Load the persisted chain sync checkpoint.
+loadCheckpoint ∷ FilePath → IO (Maybe (Word64, Text))
+loadCheckpoint dbPath = withConn dbPath $ \conn → do
+  rows ∷ [(Word64, Text)] ←
+    query_ conn "SELECT slot_no, block_hash FROM chain_checkpoint WHERE id = 1"
+  case rows of
+    [(s, h)] → pure (Just (s, h))
+    _ → pure Nothing
+
+-- | Clear the chain sync checkpoint (used on reset-to-genesis).
+clearCheckpoint ∷ FilePath → IO ()
+clearCheckpoint dbPath = withConn dbPath $ \conn →
+  execute_ conn "DELETE FROM chain_checkpoint WHERE id = 1"
 
 -- ---------------------------------------------------------------------------
 -- Preimage DB: hash → UTxO mapping
