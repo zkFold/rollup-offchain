@@ -45,7 +45,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
 import Data.Proxy (Proxy (..))
 import Data.Text.Encoding qualified as Text
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (clearCheckpoint, loadCheckpoint, pruneStateHistory, saveCheckpoint, saveState, saveStateHistory)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (loadCheckpoint, saveCheckpoint, saveResetToGenesisDb, saveRollbackDb, saveRollupUpdateDb)
 import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
@@ -304,9 +304,8 @@ resetToGenesis ctx bs ss = do
     writeTVar (bsStateHistoryVar bs) []
   writeIORef (ssRecentBlocksRef ss) []
   writeIORef (ssCheckpointRef ss) Api.ChainPointAtGenesis
-  pruneStateHistory (ctxDbPath ctx) 0
-  clearCheckpoint (ctxDbPath ctx)
-  saveState (ctxDbPath ctx) initialState initLH
+  -- Atomically clear history + checkpoint + save initial state.
+  saveResetToGenesisDb (ctxDbPath ctx) initialState initLH
 
 -- | Handle a chain rollback by restoring from the state history.
 handleRollback ∷ Ctx → BatcherState → SyncState → Api.ChainPoint → IO ()
@@ -328,10 +327,8 @@ handleRollback ctx bs ss point = do
         writeTVar (bsLeafHashesVar bs) lh
         writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves lh)
         writeTVar (bsStateHistoryVar bs) rest
-      -- Keep DB history in sync: remove snapshots newer than the rollback target.
-      pruneStateHistory (ctxDbPath ctx) targetSlot
-      -- Persist the restored state so a crash after rollback doesn't lose it.
-      saveState (ctxDbPath ctx) st lh
+      -- Atomically prune history and persist the restored state.
+      saveRollbackDb (ctxDbPath ctx) targetSlot st lh
     [] → do
       -- No snapshot covers this slot; reset to genesis and restart chain sync
       -- so it replays all blocks from the beginning.
@@ -433,10 +430,8 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
     writeTVar (bsStateHistoryVar bs) $
       take 20 ((slot, currentState, currentLeafHashes) : history)
 
-  -- Persist to SQLite for crash recovery.
-  saveState (ctxDbPath ctx) newState newLeafHashes
-  -- Persist rollback snapshot so history survives restarts.
-  saveStateHistory (ctxDbPath ctx) slot currentState currentLeafHashes
+  -- Persist state + history snapshot atomically.
+  saveRollupUpdateDb (ctxDbPath ctx) newState newLeafHashes slot currentState currentLeafHashes
   gyLogInfo (ctxProviders ctx) mempty $
     "Chain sync: state updated, " <> show (length modifiedLeaves) <> " leaf positions modified"
 
