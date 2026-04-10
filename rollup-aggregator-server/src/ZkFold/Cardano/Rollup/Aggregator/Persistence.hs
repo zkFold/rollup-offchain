@@ -23,6 +23,9 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   saveCheckpoint,
   loadCheckpoint,
   clearCheckpoint,
+  saveRollupUpdateDb,
+  saveRollbackDb,
+  saveResetToGenesisDb,
   savePreimagesDb,
   lookupPreimagesDb,
   lookupPreimagesByRefDb,
@@ -497,6 +500,69 @@ loadCheckpoint dbPath = withConn dbPath $ \conn → do
 clearCheckpoint ∷ FilePath → IO ()
 clearCheckpoint dbPath = withConn dbPath $ \conn →
   execute_ conn "DELETE FROM chain_checkpoint WHERE id = 1"
+
+-- ---------------------------------------------------------------------------
+-- Atomic composite writes (single transaction)
+-- ---------------------------------------------------------------------------
+
+-- | Atomically persist a rollup state update: new state + history snapshot.
+-- Called by ChainSync after each on-chain rollup update.
+saveRollupUpdateDb
+  ∷ FilePath
+  → State I
+  → Leaves Ud (FieldElement I)
+  -- ^ New (post-update) state and leaf hashes.
+  → Word64
+  → State I
+  → Leaves Ud (FieldElement I)
+  -- ^ History snapshot: slot, pre-update state and leaf hashes.
+  → IO ()
+saveRollupUpdateDb dbPath newState newLeafHashes histSlot histState histLeafHashes =
+  withConn dbPath $ \conn → withTransaction conn $ do
+    execute
+      conn
+      "INSERT OR REPLACE INTO ledger_state (id, ledger_state, utxo_preimage) VALUES (1, ?, ?)"
+      (toText newState, toText newLeafHashes)
+    execute
+      conn
+      "INSERT OR REPLACE INTO state_history (slot_no, ledger_state, leaf_hashes) VALUES (?, ?, ?)"
+      (histSlot, toText histState, toText histLeafHashes)
+    execute_
+      conn
+      "DELETE FROM state_history WHERE slot_no NOT IN \
+      \(SELECT slot_no FROM state_history ORDER BY slot_no DESC LIMIT 20)"
+ where
+  toText ∷ ToJSON a ⇒ a → Text
+  toText = decodeUtf8 . toStrict . encode
+
+-- | Atomically persist a rollback: prune history + save restored state.
+-- Called by ChainSync after restoring from a history snapshot.
+saveRollbackDb ∷ FilePath → Word64 → State I → Leaves Ud (FieldElement I) → IO ()
+saveRollbackDb dbPath targetSlot restoredState restoredLeafHashes =
+  withConn dbPath $ \conn → withTransaction conn $ do
+    execute conn "DELETE FROM state_history WHERE slot_no > ?" (Only targetSlot)
+    execute
+      conn
+      "INSERT OR REPLACE INTO ledger_state (id, ledger_state, utxo_preimage) VALUES (1, ?, ?)"
+      (toText restoredState, toText restoredLeafHashes)
+ where
+  toText ∷ ToJSON a ⇒ a → Text
+  toText = decodeUtf8 . toStrict . encode
+
+-- | Atomically persist a genesis reset: clear history + checkpoint + save initial state.
+-- Called when state is irrecoverably inconsistent.
+saveResetToGenesisDb ∷ FilePath → State I → Leaves Ud (FieldElement I) → IO ()
+saveResetToGenesisDb dbPath initState initLeafHashes =
+  withConn dbPath $ \conn → withTransaction conn $ do
+    execute conn "DELETE FROM state_history WHERE slot_no > ?" (Only (0 ∷ Word64))
+    execute_ conn "DELETE FROM chain_checkpoint WHERE id = 1"
+    execute
+      conn
+      "INSERT OR REPLACE INTO ledger_state (id, ledger_state, utxo_preimage) VALUES (1, ?, ?)"
+      (toText initState, toText initLeafHashes)
+ where
+  toText ∷ ToJSON a ⇒ a → Text
+  toText = decodeUtf8 . toStrict . encode
 
 -- ---------------------------------------------------------------------------
 -- Preimage DB: hash → UTxO mapping
