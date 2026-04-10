@@ -7,13 +7,9 @@ module ZkFold.Cardano.Rollup.Types.Script (
 
 import GeniusYield.Types
 import ZkFold.Cardano.UPLC.RollupSimple.Types qualified as Onchain
-import ZkFold.Protocol.Plonkup.OffChain.Cardano (ZKSetupBytes)
-
-import ZkFold.Cardano.Rollup.Utils (setupToPlutus)
 
 data ZKRollupStakeValConfig = ZKRollupStakeValConfig
   { zkrsvcNFT ∷ GYNonAdaToken
-  , zkrsvcSetupBytes ∷ ZKSetupBytes
   , zkrsvcMaxBridgeIn ∷ Natural
   , zkrsvcMaxBridgeOut ∷ Natural
   , zkrsvcMaxOutputAssets ∷ Natural
@@ -25,7 +21,6 @@ rollupStakeValConfigToPlutus ZKRollupStakeValConfig {..} =
   Onchain.RollupConfiguration
     { rcNftCurrencySymbol = mintingPolicyIdToCurrencySymbol nftMP
     , rcNftTokenName = tokenNameToPlutus nftTN
-    , rcSetupBytes = setupToPlutus zkrsvcSetupBytes
     , rcMaxBridgeIn = fromIntegral zkrsvcMaxBridgeIn
     , rcMaxBridgeOut = fromIntegral zkrsvcMaxBridgeOut
     , rcMaxOutputAssets = fromIntegral zkrsvcMaxOutputAssets

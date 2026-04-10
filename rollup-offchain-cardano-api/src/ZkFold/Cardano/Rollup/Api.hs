@@ -37,6 +37,9 @@ import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types (Output (..), UTxO (..), nullUTxO)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 
+import           Plutus.Crypto.Halo2.Proof (Proof)
+
+
 -- | Get the rollup address.
 rollupAddress ∷ ZKRollupQueryMonad m ⇒ m GYAddress
 rollupAddress = do
@@ -51,8 +54,7 @@ rollupAddress' rollupScript mstakeCred = do
 
 seedRollup
   ∷ GYTxBuilderMonad m
-  ⇒ ZKSetupBytes
-  → Natural
+  ⇒ Natural
   -- ^ Max bridge in outputs.
   → Natural
   -- ^ Max bridge out outputs.
@@ -61,7 +63,7 @@ seedRollup
   → Maybe (GYCredential 'GYKeyRoleStaking)
   → RollupState
   → m (ZKInitializedRollupBuildInfo, GYTxBody)
-seedRollup setup maxBridgeIn maxBridgeOut maxOutputAssets mstakeCred initialState = do
+seedRollup maxBridgeIn maxBridgeOut maxOutputAssets mstakeCred initialState = do
   (nft, mintTokenSkel) ← mintTestTokens "zkFold-rollup-nft" 1
   let (nftMP, nftTN) = case nonAdaTokenFromAssetClass nft of
         Nothing → error "seedRollup: absurd, minted token cannot be lovelace"
@@ -71,7 +73,6 @@ seedRollup setup maxBridgeIn maxBridgeOut maxOutputAssets mstakeCred initialStat
           { zkrsvcMaxOutputAssets = maxOutputAssets
           , zkrsvcMaxBridgeOut = maxBridgeOut
           , zkrsvcMaxBridgeIn = maxBridgeIn
-          , zkrsvcSetupBytes = setup
           , zkrsvcNFT = GYNonAdaToken nftMP nftTN
           }
       rollupStakeScript =
@@ -163,7 +164,7 @@ updateRollupState
   -- ^ Value to bridge in along with layer 2 address which will hold this value.
   → [(GYValue, GYAddress)]
   -- ^ Value to bridge-out.
-  → ProofBytes
+  → Proof
   → [Integer]
   -- ^ Tree delta: flattened list of field elements encoding Merkle tree leaf changes.
   → m (GYTxSkeleton 'PlutusV3)

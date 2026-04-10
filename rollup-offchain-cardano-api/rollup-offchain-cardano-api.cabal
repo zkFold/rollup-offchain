@@ -69,6 +69,7 @@ library
     text,
     zkfold-cardano,
     zkfold-cardano-scripts-common,
+    zkfold-plutus-halo2,
 
   hs-source-dirs: src
 
