@@ -68,6 +68,22 @@ data RetryState = RetryState
   , rsConsecFailures ∷ !(IORef Int)
   }
 
+-- | Mutable chain sync state for checkpoint management.
+data SyncState = SyncState
+  { ssCheckpointRef ∷ !(IORef Api.ChainPoint)
+  -- ^ The current safe checkpoint (persisted to DB, used for FindIntersect).
+  , ssRecentBlocksRef ∷ !(IORef [(Word64, Api.Hash Api.BlockHeader)])
+  -- ^ Ring buffer of (slot, blockHash) from recent rollup updates.
+  -- Most recent first, capped at 'checkpointDepth'. The oldest entry
+  -- becomes the next checkpoint once the buffer is full.
+  }
+
+-- | How many rollup updates behind the tip the checkpoint should lag.
+-- This ensures the checkpoint points to a block deep enough to be
+-- effectively immune to rollbacks.
+checkpointDepth ∷ Int
+checkpointDepth = 20
+
 -- | Start the chain sync client as a background thread.
 -- Returns the async handle (linked to the calling thread so exceptions propagate).
 startChainSync
@@ -94,7 +110,9 @@ startChainSync ctx bs socketPath = do
           pure Api.ChainPointAtGenesis
     Nothing → pure Api.ChainPointAtGenesis
   checkpointRef ← newIORef resumePoint
-  a ← Async.async $ chainSyncLoop ctx bs connInfo rs checkpointRef
+  recentBlocksRef ← newIORef []
+  let ss = SyncState checkpointRef recentBlocksRef
+  a ← Async.async $ chainSyncLoop ctx bs connInfo rs ss
   Async.link a
   pure a
 
@@ -115,8 +133,8 @@ maxConsecFailures = 5
 --     'Async.link' and graceful shutdown work correctly.
 --   * More than 'maxConsecFailures' consecutive failures without a single
 --     successful block — likely a permanent error (logic bug, DB corruption).
-chainSyncLoop ∷ Ctx → BatcherState → Api.LocalNodeConnectInfo → RetryState → IORef Api.ChainPoint → IO ()
-chainSyncLoop ctx bs connInfo rs checkpointRef = do
+chainSyncLoop ∷ Ctx → BatcherState → Api.LocalNodeConnectInfo → RetryState → SyncState → IO ()
+chainSyncLoop ctx bs connInfo rs ss = do
   gyLogInfo (ctxProviders ctx) mempty "Chain sync: connecting to local node"
   Api.connectToLocalNode connInfo protocols
     `catch` \(e ∷ SomeException) →
@@ -141,11 +159,11 @@ chainSyncLoop ctx bs connInfo rs checkpointRef = do
                   <> show e <> ", reconnecting in " <> show backoffSecs <> "s"
               threadDelay backoff
               writeIORef (rsBackoffMicros rs) (min maxBackoffMicros (backoff * 2))
-              chainSyncLoop ctx bs connInfo rs checkpointRef
+              chainSyncLoop ctx bs connInfo rs ss
  where
   protocols =
     Api.LocalNodeClientProtocols
-      { localChainSyncClient = Api.LocalChainSyncClient $ chainSyncClient ctx bs rs checkpointRef
+      { localChainSyncClient = Api.LocalChainSyncClient $ chainSyncClient ctx bs rs ss
       , localTxSubmissionClient = Nothing
       , localStateQueryClient = Nothing
       , localTxMonitoringClient = Nothing
@@ -158,11 +176,11 @@ chainSyncClient
   ∷ Ctx
   → BatcherState
   → RetryState
-  → IORef Api.ChainPoint
+  → SyncState
   → Api.ChainSyncClient Api.BlockInMode Api.ChainPoint Api.ChainTip IO ()
-chainSyncClient ctx bs rs checkpointRef =
+chainSyncClient ctx bs rs ss =
   Api.ChainSyncClient $ do
-    resumePoint ← readIORef checkpointRef
+    resumePoint ← readIORef (ssCheckpointRef ss)
     let intersectPoints = case resumePoint of
           Api.ChainPointAtGenesis → [Api.ChainPointAtGenesis]
           cp → [cp, Api.ChainPointAtGenesis] -- Fall back to genesis if checkpoint not on chain.
@@ -195,19 +213,19 @@ chainSyncClient ctx bs rs checkpointRef =
   handleNext =
     Api.Sync.ClientStNext
       { Api.Sync.recvMsgRollForward = \block _tip → Api.ChainSyncClient $ do
-          handleRollForward ctx bs checkpointRef block
+          handleRollForward ctx bs ss block
           touch
           pure requestNext
       , Api.Sync.recvMsgRollBackward = \point _tip → Api.ChainSyncClient $ do
-          handleRollback ctx bs point
+          handleRollback ctx bs ss point
           touch
           pure requestNext
       }
 
 -- | Process a new block: scan for rollup state updates.
 -- ChainSync is the single writer for the Merkle tree and state TVars.
-handleRollForward ∷ Ctx → BatcherState → IORef Api.ChainPoint → Api.BlockInMode → IO ()
-handleRollForward ctx bs checkpointRef (Api.BlockInMode Api.ConwayEra block) = do
+handleRollForward ∷ Ctx → BatcherState → SyncState → Api.BlockInMode → IO ()
+handleRollForward ctx bs ss (Api.BlockInMode Api.ConwayEra block) = do
   let Api.BlockHeader (Api.SlotNo slot) blockHash _ = Api.getBlockHeader block
       txs = Api.getBlockTxs block
       nft = zkirbiNFT (ctxRollupBuildInfo ctx)
@@ -228,11 +246,8 @@ handleRollForward ctx bs checkpointRef (Api.BlockInMode Api.ConwayEra block) = d
             "Chain sync: applying state update (chain len " <> show localChainLen
               <> " → " <> show onChainLen <> ", slot " <> show slot <> ")"
           applyRollupUpdate ctx bs slot rsuNewRollupState rsuDelta
-          -- Save checkpoint so restarts skip already-processed blocks.
-          let hashHex = Text.decodeLatin1 (Api.serialiseToRawBytesHex blockHash)
-              cp = Api.ChainPoint (Api.SlotNo slot) blockHash
-          saveCheckpoint (ctxDbPath ctx) slot hashHex
-          writeIORef checkpointRef cp
+          -- Track this block for lagged checkpointing.
+          updateCheckpoint ctx ss slot blockHash
       | isAlreadySeen → pure () -- Replay after restart, already processed.
       | isGap → do
           -- State discontinuity: we missed update(s). This means our persisted
@@ -242,7 +257,7 @@ handleRollForward ctx bs checkpointRef (Api.BlockInMode Api.ConwayEra block) = d
             "Chain sync: state discontinuity detected (local len "
               <> show localChainLen <> ", on-chain len " <> show onChainLen
               <> "). Resetting to genesis and resyncing."
-          resetToGenesis ctx bs
+          resetToGenesis ctx bs ss
           throwIO $ userError "Chain sync: state discontinuity, resyncing from genesis"
       | otherwise → do
           -- Unexpected: onChainLen < localChainLen but roots differ.
@@ -252,32 +267,56 @@ handleRollForward ctx bs checkpointRef (Api.BlockInMode Api.ConwayEra block) = d
               <> show localChainLen <> " root " <> show localRoot
               <> ", on-chain len " <> show onChainLen <> " root " <> show onChainRoot
               <> "). Resetting to genesis and resyncing."
-          resetToGenesis ctx bs
+          resetToGenesis ctx bs ss
           throwIO $ userError "Chain sync: unexpected state mismatch, resyncing from genesis"
 handleRollForward _ _ _ _ = pure () -- Ignore non-Conway blocks.
 
+-- | Push a new (slot, blockHash) onto the recent-blocks buffer. When the buffer
+-- reaches 'checkpointDepth', persist the oldest entry as the safe checkpoint.
+-- This ensures the checkpoint is always at least 'checkpointDepth' rollup updates
+-- behind the tip, making it effectively immune to rollbacks.
+updateCheckpoint ∷ Ctx → SyncState → Word64 → Api.Hash Api.BlockHeader → IO ()
+updateCheckpoint ctx SyncState {..} slot blockHash = do
+  recent ← readIORef ssRecentBlocksRef
+  let recent' = take checkpointDepth ((slot, blockHash) : recent)
+  writeIORef ssRecentBlocksRef recent'
+  -- Only persist when the buffer is full — the oldest entry is the safe checkpoint.
+  if length recent' >= checkpointDepth
+    then do
+      let (safeSlot, safeHash) = last recent'
+          hashHex = Text.decodeLatin1 (Api.serialiseToRawBytesHex safeHash)
+          cp = Api.ChainPoint (Api.SlotNo safeSlot) safeHash
+      saveCheckpoint (ctxDbPath ctx) safeSlot hashHex
+      writeIORef ssCheckpointRef cp
+    else pure ()
+
 -- | Reset all state to genesis (initial state, empty tree, empty history).
 -- Persists the reset to SQLite so it survives a crash.
-resetToGenesis ∷ Ctx → BatcherState → IO ()
-resetToGenesis ctx bs = do
+resetToGenesis ∷ Ctx → BatcherState → SyncState → IO ()
+resetToGenesis ctx bs ss = do
   let initLH = pure (nullUTxOHash @A @I)
   atomically $ do
     writeTVar (bsLedgerStateVar bs) initialState
     writeTVar (bsLeafHashesVar bs) initLH
     writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves initLH)
     writeTVar (bsStateHistoryVar bs) []
+  writeIORef (ssRecentBlocksRef ss) []
+  writeIORef (ssCheckpointRef ss) Api.ChainPointAtGenesis
   pruneStateHistory (ctxDbPath ctx) 0
   clearCheckpoint (ctxDbPath ctx)
   saveState (ctxDbPath ctx) initialState initLH
 
 -- | Handle a chain rollback by restoring from the state history.
-handleRollback ∷ Ctx → BatcherState → Api.ChainPoint → IO ()
-handleRollback ctx bs point = do
+handleRollback ∷ Ctx → BatcherState → SyncState → Api.ChainPoint → IO ()
+handleRollback ctx bs ss point = do
   let targetSlot = case point of
         Api.ChainPointAtGenesis → 0
         Api.ChainPoint (Api.SlotNo s) _ → s
   gyLogWarning (ctxProviders ctx) mempty $
     "Chain sync: rollback to slot " <> show targetSlot
+  -- Trim the recent-blocks buffer to discard entries newer than the target.
+  recent ← readIORef (ssRecentBlocksRef ss)
+  writeIORef (ssRecentBlocksRef ss) (filter (\(s, _) → s <= targetSlot) recent)
   history ← readTVarIO (bsStateHistoryVar bs)
   -- Find the most recent snapshot at or before the target slot.
   case dropWhile (\(s, _, _) → s > targetSlot) history of
@@ -296,7 +335,7 @@ handleRollback ctx bs point = do
       -- so it replays all blocks from the beginning.
       gyLogWarning (ctxProviders ctx) mempty $
         "Chain sync: rollback beyond history depth, resetting to genesis and resyncing"
-      resetToGenesis ctx bs
+      resetToGenesis ctx bs ss
       throwIO $ userError "Chain sync: rollback beyond history, resyncing from genesis"
 
 -- | Scan a single transaction for a rollup state update.
