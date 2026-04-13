@@ -12,9 +12,10 @@ import Servant.Foreign
 import Servant.OpenApi
 import Text.Read (readMaybe)
 import ZkFold.Algebra.Class (fromConstant)
-import ZkFold.Cardano.Rollup.Aggregator.Auth (APIKeyAuthProtect, apiKeyHeaderText)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
+
+import ZkFold.Cardano.Rollup.Aggregator.Auth (APIKeyAuthProtect, apiKeyHeaderText)
 
 instance ToParamSchema (FieldElement RollupBFInterpreter) where
   toParamSchema _ = mempty & type_ ?~ OpenApiInteger

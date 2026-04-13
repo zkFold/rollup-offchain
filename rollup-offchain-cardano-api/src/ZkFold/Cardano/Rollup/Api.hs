@@ -19,10 +19,8 @@ import GeniusYield.Api.TestTokens (mintTestTokens)
 import GeniusYield.Examples.Limbo (limboValidatorV2)
 import GeniusYield.TxBuilder
 import GeniusYield.Types
+import Plutus.Crypto.Halo2.Proof (Proof)
 import ZkFold.Algebra.Class (ToConstant (toConstant))
-import ZkFold.Cardano.OnChain.Plonkup.Data (ProofBytes)
-import ZkFold.Cardano.Rollup.Constants
-import ZkFold.Cardano.Rollup.Types
 import ZkFold.Cardano.UPLC.RollupSimple.Types (
   BridgeUtxoInfo (..),
   BridgeUtxoStatus (..),
@@ -32,13 +30,12 @@ import ZkFold.Cardano.UPLC.RollupSimple.Types (
 import ZkFold.Cardano.UPLC.RollupSimple.Utils (addressToBS, byteStringToInteger')
 import ZkFold.Data.MerkleTree (Leaves, MerkleTreeSize)
 import ZkFold.Data.Vector (fromVector)
-import ZkFold.Protocol.Plonkup.OffChain.Cardano
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types (Output (..), UTxO (..), nullUTxO)
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 
-import           Plutus.Crypto.Halo2.Proof (Proof)
-
+import ZkFold.Cardano.Rollup.Constants
+import ZkFold.Cardano.Rollup.Types
 
 -- | Get the rollup address.
 rollupAddress ∷ ZKRollupQueryMonad m ⇒ m GYAddress
@@ -313,24 +310,24 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes treeDelta = do
         )
       -- For simplicity, we are putting remaining value in a single output. This of course can be problematic if not all assets fit in a single output.
       <> ( if valueRem /= mempty
-            then
-              mustHaveOutput
-                ( GYTxOut
-                    { gyTxOutValue = valueRem
-                    , gyTxOutRefS = Nothing
-                    , gyTxOutDatum =
-                        Just
-                          ( datumFromPlutusData $
-                              BridgeUtxoInfo
-                                { buiStatus = BridgeBalance
-                                , buiORef = utxoRef rollupUTxO & txOutRefToPlutusV3
-                                }
-                          , GYTxOutUseInlineDatum
-                          )
-                    , gyTxOutAddress = rollupAddr
-                    }
-                )
-            else mempty
+             then
+               mustHaveOutput
+                 ( GYTxOut
+                     { gyTxOutValue = valueRem
+                     , gyTxOutRefS = Nothing
+                     , gyTxOutDatum =
+                         Just
+                           ( datumFromPlutusData $
+                               BridgeUtxoInfo
+                                 { buiStatus = BridgeBalance
+                                 , buiORef = utxoRef rollupUTxO & txOutRefToPlutusV3
+                                 }
+                           , GYTxOutUseInlineDatum
+                           )
+                     , gyTxOutAddress = rollupAddr
+                     }
+                 )
+             else mempty
          )
 
 -- | Query UTxOs at a given L2 address from the UTxO preimage.

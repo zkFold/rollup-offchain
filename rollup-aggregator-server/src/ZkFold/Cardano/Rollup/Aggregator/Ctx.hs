@@ -56,6 +56,7 @@ data Ctx = Ctx
   -- ^ SQLite database file path shared between server and batcher processes.
   , ctxNodeSocketPath ∷ !FilePath
   -- ^ Path to the cardano-node socket. Used for chain sync.
+  , ctxHalo2ProverExe ∷ !FilePath
   }
 
 logDebug ∷ HasCallStack ⇒ Ctx → String → IO ()

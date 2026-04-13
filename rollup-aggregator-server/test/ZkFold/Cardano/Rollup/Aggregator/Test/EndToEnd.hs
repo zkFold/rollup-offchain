@@ -2,11 +2,13 @@
 
 module ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd (endToEndTests) where
 
+-- import Data.ByteString (ByteString)
+
+import Cardano.Api qualified as Api
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.Reader (runReaderT)
 import Data.Aeson qualified as Aeson
--- import Data.ByteString (ByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Data (Proxy (..))
 import Data.Function ((&))
@@ -14,7 +16,6 @@ import Data.Maybe (fromMaybe)
 import GHC.Generics ((:.:) (..), type (:*:) (..))
 import GHC.TypeNats (natVal)
 import GeniusYield.Test.FakeCoin (FakeCoin (..), fakePolicy, fakeValue)
-import Cardano.Api qualified as Api
 import GeniusYield.Test.Privnet.Ctx (
   Ctx (ctxInfo),
   ctxNetworkId,
@@ -41,8 +42,20 @@ import GeniusYield.Types (
   valueFromLovelace,
  )
 import System.Directory (removePathForcibly)
+import           System.Environment                     (getEnv)
 import Test.Tasty (TestTree, testGroup, withResource)
 import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCaseSteps)
+-- G,
+
+-- import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup, ledgerCircuit)
+import ZkFold.Algebra.Class (Zero (zero))
+import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
+import ZkFold.Cardano.Rollup.Api.Utils (feToInteger, stateToRollupState)
+import ZkFold.Data.Vector (fromVector)
+import ZkFold.Symbolic.Data.Hash (Hash (hHash))
+import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
+import ZkFold.Symbolic.Ledger.Types (Output (..), OutputRef (..), State (..), Transaction (..), UTxO (..), txId)
+
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initBatcherState, processBatch)
 import ZkFold.Cardano.Rollup.Aggregator.ChainSync (startChainSync)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
@@ -74,16 +87,8 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   TxResponse (..),
   TxStatus (..),
   TxsByAddressResponse (..),
-  -- G,
  )
-import ZkFold.Cardano.Rollup.Api (registerRollupStake, seedRollup)
-import ZkFold.Cardano.Rollup.Api.Utils (feToInteger, stateToRollupState)
-import ZkFold.Data.Vector (fromVector)
--- import ZkFold.Symbolic.Ledger.Circuit.Compile (ledgerSetup, mkSetup, ledgerCircuit)
-import ZkFold.Algebra.Class (Zero (zero))
-import ZkFold.Symbolic.Data.Hash (Hash (hHash))
-import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
-import ZkFold.Symbolic.Ledger.Types (Output (..), OutputRef (..), State (..), Transaction (..), UTxO (..), txId)
+
 -- import ZkFold.Protocol.NonInteractiveProof.TrustedSetup (powersOfTauSubset)
 
 endToEndTests ∷ Setup → TestTree
@@ -94,22 +99,15 @@ endToEndTests setup =
         removePathForcibly dbPath
         initDb dbPath
         batcherState ← initBatcherState dbPath
-        -- ts <- powersOfTauSubset
-        setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
-        let
-          -- circuit = ledgerCircuit @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I
-          setupBytes =
-            -- ledgerSetup @G @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I ts circuit
-            --   & mkSetup
-            fromMaybe (error "Unable to decode setup-bytes") (Aeson.decode setupBytesJson)
-        pure (dbPath, batcherState, setupBytes)
+        halo2ProverExe <- getEnv "HALO2_PROVER"
+        pure (dbPath, batcherState, halo2ProverExe)
     )
     (\_ → pure ())
     $ \getResources →
       testGroup
         "End-to-end tests"
         [ testCaseSteps "Bridge-in + L2 txs + batch processing" $ \info → withSetup info setup $ \privCtx → do
-            (dbPath, batcherState, setupBytes) ← getResources
+            (dbPath, batcherState, halo2ProverExe) ← getResources
             -- BSL.writeFile "rollup-aggregator-server/test/data/setup-bytes.json" (Aeson.encode setupBytes)
             -- Step 1: Admin setup — seed rollup and register stake validator
             let fundUser = ctxUserF privCtx
@@ -119,7 +117,7 @@ endToEndTests setup =
 
             (buildInfo, txBodySeed) ←
               ctxRunBuilder privCtx fundUser $
-                seedRollup setupBytes 1 1 2 Nothing rollupState0
+                seedRollup 1 1 2 Nothing rollupState0
             tidSeed ← ctxRun privCtx fundUser $ signAndSubmitConfirmed txBodySeed
             info $ "Seed rollup: " <> show tidSeed
 
@@ -155,6 +153,7 @@ endToEndTests setup =
                     , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
                     , AggCtx.ctxDbPath = dbPath
                     , AggCtx.ctxNodeSocketPath = nodeSocket
+                    , AggCtx.ctxHalo2ProverExe = halo2ProverExe
                     }
 
             -- Start ChainSync so the Merkle tree and state are maintained.
@@ -267,7 +266,12 @@ endToEndTests setup =
             -- tx3 spends UTxOs at Ex3.address and Ex3.address2 (both exist after batch 1).
             QueryL2UtxosResponse tx3InputsAddr ← handleQueryL2Utxos aggCtx Ex3.address
             QueryL2UtxosResponse tx3InputsAddr2 ← handleQueryL2Utxos aggCtx Ex3.address2
-            info $ "Queried L2 UTxOs for tx3 inputs: " <> show (length tx3InputsAddr) <> " at address, " <> show (length tx3InputsAddr2) <> " at address2"
+            info $
+              "Queried L2 UTxOs for tx3 inputs: "
+                <> show (length tx3InputsAddr)
+                <> " at address, "
+                <> show (length tx3InputsAddr2)
+                <> " at address2"
             let bridgeOutValue = valueFromLovelace 5_000_000 <> fakeValue asset2 25_000_000
                 strReq3 =
                   SubmitTxRequest

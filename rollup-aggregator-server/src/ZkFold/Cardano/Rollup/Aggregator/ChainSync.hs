@@ -22,13 +22,13 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, readTVar, readTVarIO, writeTVar)
 import Control.Exception (SomeAsyncException, SomeException, catch, fromException, throwIO)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.Time.Clock (getCurrentTime)
 import Control.Lens ((^.))
 import Control.Monad (forM_, when)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (find)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (mapMaybe, fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Time.Clock (getCurrentTime)
 import Data.Word (Word64)
 import GeniusYield.Providers.Node (networkIdToLocalNodeConnectInfo)
 import GeniusYield.Types (
@@ -41,10 +41,6 @@ import GeniusYield.Types (
  )
 import PlutusTx qualified
 import ZkFold.Algebra.Class (FromConstant (..))
-import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState)
-import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (pruneStateHistory, saveState, saveStateHistory)
-import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
 import ZkFold.Cardano.UPLC.RollupSimple.Types (RollupSimpleRed (..), RollupState (..))
@@ -53,6 +49,11 @@ import ZkFold.Data.Vector (fromVector, unsafeToVector)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
 import ZkFold.Symbolic.Ledger.Types (State (..), nullUTxOHash)
+
+import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState)
+import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (pruneStateHistory, saveState, saveStateHistory)
+import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
 
 -- | Data extracted from an on-chain rollup state update.
 data RollupStateUpdate = RollupStateUpdate
@@ -113,15 +114,25 @@ chainSyncLoop ctx bs connInfo rs = do
           if failures' >= maxConsecFailures
             then do
               gyLogError (ctxProviders ctx) mempty $
-                "Chain sync: " <> show failures' <> " consecutive failures, giving up. "
-                  <> "Last error: " <> show e
+                "Chain sync: "
+                  <> show failures'
+                  <> " consecutive failures, giving up. "
+                  <> "Last error: "
+                  <> show e
               throwIO e
             else do
               backoff ← readIORef (rsBackoffMicros rs)
               let backoffSecs = backoff `div` 1_000_000
               gyLogError (ctxProviders ctx) mempty $
-                "Chain sync: error (" <> show failures' <> "/" <> show maxConsecFailures <> "): "
-                  <> show e <> ", reconnecting in " <> show backoffSecs <> "s"
+                "Chain sync: error ("
+                  <> show failures'
+                  <> "/"
+                  <> show maxConsecFailures
+                  <> "): "
+                  <> show e
+                  <> ", reconnecting in "
+                  <> show backoffSecs
+                  <> "s"
               threadDelay backoff
               writeIORef (rsBackoffMicros rs) (min maxBackoffMicros (backoff * 2))
               chainSyncLoop ctx bs connInfo rs
@@ -144,7 +155,7 @@ chainSyncClient
 chainSyncClient ctx bs rs =
   Api.ChainSyncClient $ pure initialise
  where
-  -- | Bump the liveness timestamp and reset retry state after successful processing.
+  -- \| Bump the liveness timestamp and reset retry state after successful processing.
   touch ∷ IO ()
   touch = do
     now ← getCurrentTime
@@ -197,8 +208,13 @@ handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra block) = do
     if
       | isNext || isFork → do
           gyLogInfo (ctxProviders ctx) mempty $
-            "Chain sync: applying state update (chain len " <> show localChainLen
-              <> " → " <> show onChainLen <> ", slot " <> show slot <> ")"
+            "Chain sync: applying state update (chain len "
+              <> show localChainLen
+              <> " → "
+              <> show onChainLen
+              <> ", slot "
+              <> show slot
+              <> ")"
           applyRollupUpdate ctx bs slot rsuNewRollupState rsuDelta
       | isAlreadySeen → pure () -- Replay after restart, already processed.
       | isGap → do
@@ -207,7 +223,9 @@ handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra block) = do
           -- chain sync so it replays all blocks in order.
           gyLogWarning (ctxProviders ctx) mempty $
             "Chain sync: state discontinuity detected (local len "
-              <> show localChainLen <> ", on-chain len " <> show onChainLen
+              <> show localChainLen
+              <> ", on-chain len "
+              <> show onChainLen
               <> "). Resetting to genesis and resyncing."
           resetToGenesis ctx bs
           throwIO $ userError "Chain sync: state discontinuity, resyncing from genesis"
@@ -216,8 +234,13 @@ handleRollForward ctx bs (Api.BlockInMode Api.ConwayEra block) = do
           -- Could be a deep fork. Reset to be safe.
           gyLogWarning (ctxProviders ctx) mempty $
             "Chain sync: unexpected state mismatch (local len "
-              <> show localChainLen <> " root " <> show localRoot
-              <> ", on-chain len " <> show onChainLen <> " root " <> show onChainRoot
+              <> show localChainLen
+              <> " root "
+              <> show localRoot
+              <> ", on-chain len "
+              <> show onChainLen
+              <> " root "
+              <> show onChainRoot
               <> "). Resetting to genesis and resyncing."
           resetToGenesis ctx bs
           throwIO $ userError "Chain sync: unexpected state mismatch, resyncing from genesis"
@@ -271,47 +294,48 @@ handleRollback ctx bs point = do
 -- withdrawal redeemer (via ShelleyTxBody pattern match).
 findRollupUpdate ∷ GYNonAdaToken → Api.Tx Api.ConwayEra → Maybe RollupStateUpdate
 findRollupUpdate (GYNonAdaToken nftMP nftTN) (Api.Tx txBody _) =
-  let -- Convert NFT to cardano-api AssetId for comparison.
-      nftAssetId = Api.AssetId (mintingPolicyIdToApi nftMP) (tokenNameToApi nftTN)
+  let
+    -- Convert NFT to cardano-api AssetId for comparison.
+    nftAssetId = Api.AssetId (mintingPolicyIdToApi nftMP) (tokenNameToApi nftTN)
 
-      -- Pattern match on ShelleyTxBody to access outputs and script data.
-      Api.S.ShelleyTxBody _sbe _ledgerBody _scripts scriptData _mAux _sv = txBody
-      content = Api.getTxBodyContent txBody
-      txOuts = Api.txOuts content
+    -- Pattern match on ShelleyTxBody to access outputs and script data.
+    Api.S.ShelleyTxBody _sbe _ledgerBody _scripts scriptData _mAux _sv = txBody
+    content = Api.getTxBodyContent txBody
+    txOuts = Api.txOuts content
 
-      -- Find the output carrying the NFT.
-      hasNft (Api.TxOut _addr val _datum _refScript) =
-        Api.selectAsset (Api.txOutValueToValue val) nftAssetId == 1
-      mNftOut = find hasNft txOuts
+    -- Find the output carrying the NFT.
+    hasNft (Api.TxOut _addr val _datum _refScript) =
+      Api.selectAsset (Api.txOutValueToValue val) nftAssetId == 1
+    mNftOut = find hasNft txOuts
 
-      -- Extract RollupState from the NFT output's inline datum.
-      extractRollupState (Api.TxOut _addr _val datum _) =
-        case datum of
-          Api.TxOutDatumInline _era sd →
-            PlutusTx.fromBuiltinData (PlutusTx.dataToBuiltinData (Api.S.toPlutusData (Api.getScriptData sd)))
-          _ → Nothing
-
-      -- Extract rsrDelta from any redeemer that decodes as RollupSimpleRed.
-      extractDelta = case scriptData of
-        Api.TxBodyNoScriptData → Nothing
-        Api.TxBodyScriptData _aeo _dats reds →
-          let redeemersMap = Map.toList (reds ^. Ledger.unRedeemersL)
-              tryDecode (_purpose, (datVal, _exUnits)) =
-                case PlutusTx.fromBuiltinData (PlutusTx.dataToBuiltinData (Ledger.getPlutusData datVal)) of
-                  Just (RollupSimpleRed {rsrDelta = d}) → Just d
-                  Nothing → Nothing
-           in case mapMaybe tryDecode redeemersMap of
-                (d : _) → Just d
-                [] → Nothing
-
-   in case (mNftOut, mNftOut >>= extractRollupState) of
-        (Just _, Just newState) →
-          Just
-            RollupStateUpdate
-              { rsuNewRollupState = newState
-              , rsuDelta = fromMaybe [] extractDelta
-              }
+    -- Extract RollupState from the NFT output's inline datum.
+    extractRollupState (Api.TxOut _addr _val datum _) =
+      case datum of
+        Api.TxOutDatumInline _era sd →
+          PlutusTx.fromBuiltinData (PlutusTx.dataToBuiltinData (Api.S.toPlutusData (Api.getScriptData sd)))
         _ → Nothing
+
+    -- Extract rsrDelta from any redeemer that decodes as RollupSimpleRed.
+    extractDelta = case scriptData of
+      Api.TxBodyNoScriptData → Nothing
+      Api.TxBodyScriptData _aeo _dats reds →
+        let redeemersMap = Map.toList (reds ^. Ledger.unRedeemersL)
+            tryDecode (_purpose, (datVal, _exUnits)) =
+              case PlutusTx.fromBuiltinData (PlutusTx.dataToBuiltinData (Ledger.getPlutusData datVal)) of
+                Just (RollupSimpleRed {rsrDelta = d}) → Just d
+                Nothing → Nothing
+         in case mapMaybe tryDecode redeemersMap of
+              (d : _) → Just d
+              [] → Nothing
+   in
+    case (mNftOut, mNftOut >>= extractRollupState) of
+      (Just _, Just newState) →
+        Just
+          RollupStateUpdate
+            { rsuNewRollupState = newState
+            , rsuDelta = fromMaybe [] extractDelta
+            }
+      _ → Nothing
 
 -- | Apply a rollup state update: update leaf hashes from the delta, rebuild
 -- the Merkle tree, and update the State. Saves a snapshot for rollback recovery.
@@ -338,8 +362,9 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
           }
 
   -- Snapshot current state before modifying (for rollback).
-  (currentState, currentLeafHashes) ← atomically $
-    (,) <$> readTVar (bsLedgerStateVar bs) <*> readTVar (bsLeafHashesVar bs)
+  (currentState, currentLeafHashes) ←
+    atomically $
+      (,) <$> readTVar (bsLedgerStateVar bs) <*> readTVar (bsLeafHashesVar bs)
 
   -- Extract (position, newHash) from delta and apply to leaf hashes.
   -- Pass the current leaf hashes so that null/padding input positions
@@ -411,11 +436,12 @@ collectModifiedLeaves biCount txCount nCount currentLeafHashes delta =
   -- Inputs: consumed positions → nullUTxOHash, but ONLY if the position
   -- currently holds a non-null leaf (i.e. a real UTxO being consumed).
   -- Positions that are already null are from padding inputs and must be skipped.
-  inputMap = Map.fromList
-    [ (pos, nullHash)
-    | pos ← inputPart
-    , hashAt pos /= nullHash
-    ]
+  inputMap =
+    Map.fromList
+      [ (pos, nullHash)
+      | pos ← inputPart
+      , hashAt pos /= nullHash
+      ]
 
   -- Bridge-ins: (isActive, pos, hash) triples → (pos, hash) for active.
   biMap = Map.fromList (activeOutputLeaves biPart)

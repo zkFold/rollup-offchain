@@ -2,7 +2,6 @@ module Main (main) where
 
 import Control.Monad.Reader (ReaderT (runReaderT))
 import Data.Aeson (object, (.=))
-import Data.ByteString hiding (reverse)
 import Data.Function ((&))
 import Data.Yaml qualified as Yaml
 import GeniusYield.Debug (coreConfigIO)
@@ -15,13 +14,7 @@ import System.FilePath (takeDirectory)
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
 import ZkFold.Cardano.Rollup.Types
-import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
 import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
-import ZkFold.Symbolic.Ledger.Circuit.Compile (
-  ledgerCircuit,
-  ledgerSetup,
-  mkSetup,
- )
 import ZkFold.Symbolic.Ledger.Types (nullUTxO)
 
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initialState)
@@ -109,14 +102,11 @@ runCommand RollupSeedCommand {..} = do
       rollupState0 = stateToRollupState state0
 
   Prelude.putStrLn "Generating setup parameters (this may take a while)..."
-  ts ← powersOfTauSubset
-  let compiledCircuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
-  let setupB = ledgerSetup @G @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
 
   withCfgProviders coreConfig "rollup-seed" $ \providers → do
     (initializedBuildInfo, txBodySeed) ←
       runGYTxMonadIO nid providers (AGYPaymentSigningKey signingKey) Nothing [signingKeyAddress] signingKeyAddress Nothing $
-        seedRollup setupB rscMaxBridgeIn rscMaxBridgeOut rscMaxOutputAssets Nothing rollupState0
+        seedRollup rscMaxBridgeIn rscMaxBridgeOut rscMaxOutputAssets Nothing rollupState0
 
     tidSeed ←
       runGYTxMonadIO nid providers (AGYPaymentSigningKey signingKey) Nothing [signingKeyAddress] signingKeyAddress Nothing $
@@ -150,7 +140,6 @@ writeRollupConfig nid fp ZKInitializedRollupBuildInfo {..} = do
       , "rollupAddr" .= addressToBech32 rollupAddr
       , "rollupScriptRef" .= zkirbiRollupRef
       , "rollupStakeScriptRef" .= zkirbiRollupStakeRef
-      , "setupBytes" .= zkrsvcSetupBytes zkirbiRollupStakeValConfig
       , "maxBridgeIn" .= zkrsvcMaxBridgeIn zkirbiRollupStakeValConfig
       , "maxBridgeOut" .= zkrsvcMaxBridgeOut zkirbiRollupStakeValConfig
       , "maxOutputAssets" .= zkrsvcMaxOutputAssets zkirbiRollupStakeValConfig

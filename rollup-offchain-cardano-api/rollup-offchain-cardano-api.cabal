@@ -89,6 +89,7 @@ test-suite rollup-offchain-cardano-api-tests
     base,
     bytestring,
     mtl,
+    plutus-tx,
     rollup-offchain-cardano-api,
     symbolic-base,
     symbolic-ledger,

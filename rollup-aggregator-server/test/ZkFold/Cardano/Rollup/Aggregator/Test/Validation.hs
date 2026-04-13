@@ -10,12 +10,13 @@ import PlutusTx.Builtins qualified as PlutusTx
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase)
 import ZkFold.Algebra.Class (FromConstant (..), zero)
-import ZkFold.Cardano.Rollup.Aggregator.Handlers (matchesBridgeOutValue)
-import ZkFold.Cardano.Rollup.Aggregator.Types (I)
 import ZkFold.Symbolic.Ledger.Examples.One qualified as Ex1
 import ZkFold.Symbolic.Ledger.Types (Output (..), nullOutput)
 import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..), adaName, adaPolicy, nullAssetValue)
 import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
+
+import ZkFold.Cardano.Rollup.Aggregator.Handlers (matchesBridgeOutValue)
+import ZkFold.Cardano.Rollup.Aggregator.Types (I)
 
 -- * Helpers
 

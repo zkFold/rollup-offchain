@@ -19,14 +19,14 @@ import Control.Concurrent.STM (
   writeTVar,
  )
 import Control.Exception (Exception, Handler (Handler), catches, displayException, throwIO)
-import Control.Monad (forM, forever, when, unless)
+import Control.Monad (forM, forever, unless, when)
+import Control.Monad.Except (runExceptT)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.Aeson (encode)
-import Data.ByteString (ByteString)
 import Data.ByteString.Lazy (toStrict)
 import Data.Foldable (for_)
 import Data.Function ((&))
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
@@ -37,7 +37,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Word (Word64)
-import GHC.Generics ((:*:) (..), (:.:) (..))
+import GHC.Generics (U1 (..), (:*:) (..), (:.:) (..))
 import GHC.TypeNats (natVal, type (+))
 import GeniusYield.Providers.Blockfrost (BlockfrostProviderException)
 import GeniusYield.Providers.Common (SubmitTxException)
@@ -63,10 +63,40 @@ import GeniusYield.Types (
   valueToPlutus,
  )
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenValue)
+import PlutusTx.Builtins qualified as PlutusTx
 import System.Timeout (timeout)
 import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Algebra.EllipticCurve.Class (TwistedEdwards (..))
+import ZkFold.Algebra.Polynomial.Univariate (PolyVec)
+import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
+import ZkFold.Cardano.Rollup.Api.Utils (computeDelta, feToInteger, stateToRollupState)
+import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
+import ZkFold.Cardano.UPLC.RollupSimple.Types (BridgeUtxoStatus (..))
+import ZkFold.Data.MerkleTree (Leaves)
+import ZkFold.Data.Vector (Vector, fromVector)
+import ZkFold.Protocol.Halo2.Export (runProver)
+import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
+import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
+import ZkFold.Symbolic.Data.Bool (BoolType (false))
+import ZkFold.Symbolic.Data.Bool qualified as ZkBool
+import ZkFold.Symbolic.Data.Class (arithmetize, payload)
+import ZkFold.Symbolic.Data.EllipticCurve.Point.Affine (AffinePoint (..))
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
+import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
+import ZkFold.Symbolic.Interpreter (runInterpreter)
+import ZkFold.Symbolic.Ledger.Circuit.Compile (
+  LedgerCircuit,
+  LedgerCircuitGates,
+  LedgerContractInput (..),
+  ledgerCircuit,
+ )
+import ZkFold.Symbolic.Ledger.Offchain.State.Update (updateLedgerState)
+import ZkFold.Symbolic.Ledger.Types
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBF)
+import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
+
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (
@@ -87,31 +117,6 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   seedPreimageDbFromOldState,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types
-import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
-import ZkFold.Cardano.Rollup.Api.Utils (computeDelta, feToInteger, stateToRollupState)
-import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
-import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
-import ZkFold.Cardano.UPLC.RollupSimple.Types (BridgeUtxoStatus (..))
-import ZkFold.Data.MerkleTree (Leaves)
-import ZkFold.Data.Vector (Vector, fromVector)
-import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
-import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
-import ZkFold.Symbolic.Data.Bool (BoolType (false))
-import ZkFold.Symbolic.Data.Bool qualified as ZkBool
-import ZkFold.Symbolic.Data.EllipticCurve.Point.Affine (AffinePoint (..))
-import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
-import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
-import ZkFold.Symbolic.Ledger.Circuit.Compile (
-  LedgerCircuit,
-  LedgerContractInput (..),
-  ledgerCircuit,
-  ledgerProof,
-  mkProof,
- )
-import ZkFold.Symbolic.Ledger.Offchain.State.Update (updateLedgerState)
-import ZkFold.Symbolic.Ledger.Types
-import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 -- | In-process mutable state and cryptographic material for the batcher.
 --
@@ -339,15 +344,13 @@ startBatcher ctx@Ctx {..} bs = do
     let staleSecs = realToFrac (diffUTCTime now lastAlive) ∷ Double
     alreadyWarned ← readIORef chainSyncWarnedRef
     if staleSecs > 300
-      then
-        unless alreadyWarned $ do
-          gyLogWarning ctxProviders mempty $
-            "ChainSync appears stuck: no block processed in " <> show (round staleSecs ∷ Int) <> "s"
-          writeIORef chainSyncWarnedRef True
-      else
-        when alreadyWarned $ do
-          gyLogInfo ctxProviders mempty "ChainSync recovered, processing blocks again"
-          writeIORef chainSyncWarnedRef False
+      then unless alreadyWarned $ do
+        gyLogWarning ctxProviders mempty $
+          "ChainSync appears stuck: no block processed in " <> show (round staleSecs ∷ Int) <> "s"
+        writeIORef chainSyncWarnedRef True
+      else when alreadyWarned $ do
+        gyLogInfo ctxProviders mempty "ChainSync recovered, processing blocks again"
+        writeIORef chainSyncWarnedRef False
     -- Detect state changes from ChainSync (external updates or rollbacks).
     -- bsLedgerStateVar is written ONLY by ChainSync, so changes indicate
     -- on-chain state updates.
@@ -482,14 +485,13 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
           , lciNewState = newState
           , lciStateWitness = witness
           }
-      proof =
-        ledgerProof @_ @ByteString
-          bsTrustedSetup
-          bsProverSecret
-          bsLedgerCircuit
-          lci
-      proofBytes = mkProof proof
-      proofPlutus = proofToPlutus proofBytes
+      witnessInputs = runInterpreter $ arithmetize lci
+      compiledInput = (witnessInputs :*: U1) :*: (payload lci :*: U1)
+
+  Right proofBytes ←
+    runExceptT $ runProver @_ @_ @LedgerCircuitGates @_ @(PolyVec RollupBF) ctxHalo2ProverExe bsLedgerCircuit compiledInput
+
+  let proofPlutus = PlutusTx.toBuiltin proofBytes
       rollupState = stateToRollupState newState
       delta = computeDelta witness batch bridgedIn newState
       collateral = Just (ctxCollateral, False)

@@ -9,24 +9,24 @@ import Data.List (iterate, zip3)
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeNats (KnownNat, type (-))
 import ZkFold.Algebra.Class (PrimeField (..), ToConstant (..), one, zero)
-import qualified ZkFold.Algebra.Class as Algebra
+import ZkFold.Algebra.Class qualified as Algebra
 import ZkFold.Cardano.UPLC.RollupSimple.Types
 import ZkFold.Data.MerkleTree (MerkleTreeSize)
 import ZkFold.Data.Vector (Vector, fromVector)
 import ZkFold.Symbolic.Class (Symbolic)
+import ZkFold.Symbolic.Data.Bool (BoolType (false))
+import ZkFold.Symbolic.Data.Bool qualified as ZkBool
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Data.MerkleTree (packIndex)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
 import ZkFold.Symbolic.Interpreter (Interpreter)
-import ZkFold.Symbolic.Data.Bool (BoolType (false))
-import ZkFold.Symbolic.Data.Bool qualified as ZkBool
 import ZkFold.Symbolic.Ledger.Types
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Validation.State (StateWitness (..))
 import ZkFold.Symbolic.Ledger.Validation.Transaction (TransactionWitness (..))
 import ZkFold.Symbolic.Ledger.Validation.TransactionBatch (TransactionBatchWitness (..))
-import Prelude (Integer, concatMap, map, not, zip, (&&), (==), (/=), (.), (<>))
+import Prelude (Integer, concatMap, map, not, zip, (&&), (.), (/=), (<>), (==))
 
 -- | Convert a field element to an 'Integer'.
 feToInteger ∷ (PrimeField a, IntegralOf a ~ Integer) ⇒ FieldElement (Interpreter a) → Integer
@@ -49,7 +49,12 @@ computeDelta
    . ( Symbolic RollupBFInterpreter
      , KnownNat (ud - 1)
      , KnownNat (MerkleTreeSize ud)
-     , KnownNat bi, KnownNat bo, KnownNat a, KnownNat s, KnownNat n, KnownNat t
+     , KnownNat bi
+     , KnownNat bo
+     , KnownNat a
+     , KnownNat s
+     , KnownNat n
+     , KnownNat t
      )
   ⇒ StateWitness bi bo ud a s n t RollupBFInterpreter
   → TransactionBatch n a t RollupBFInterpreter
@@ -69,51 +74,58 @@ computeDelta witness batch bridgedIn newSt =
     -- paths, producing different hashes.
     bridgeInHash = sLength newSt & hash & hHash
     biOutputsWithIx = zip (fromVector $ unComp1 bridgedIn) (iterate (Algebra.+ one) zero)
-    biDelta = concatMap
-      (\(entry, (output, ix)) →
-        let isNull = output == nullOutput
-            isActive = not isNull
-            pos = packIndex (SymMerkle.position entry)
-            utxo = UTxO {uRef = OutputRef {orTxId = bridgeInHash, orIndex = ix}, uOutput = output}
-            utxoHash = hash utxo & hHash
-         in [ if isActive then 1 else 0
-            , fe pos
-            , fe utxoHash
-            ]
-      )
-      (zip (fromVector $ unComp1 $ swAddBridgeIn witness) biOutputsWithIx)
+    biDelta =
+      concatMap
+        ( \(entry, (output, ix)) →
+            let isNull = output == nullOutput
+                isActive = not isNull
+                pos = packIndex (SymMerkle.position entry)
+                utxo = UTxO {uRef = OutputRef {orTxId = bridgeInHash, orIndex = ix}, uOutput = output}
+                utxoHash = hash utxo & hHash
+             in [ if isActive then 1 else 0
+                , fe pos
+                , fe utxoHash
+                ]
+        )
+        (zip (fromVector $ unComp1 $ swAddBridgeIn witness) biOutputsWithIx)
 
     -- Input delta: packedPosition per input per transaction
     txWitnesses = fromVector $ unComp1 $ tbwTransactions (swTransactionBatch witness)
-    inputDelta = concatMap
-      (\tw → map
-        (\(entry :*: _) → fe $ packIndex (SymMerkle.position entry))
-        (fromVector $ unComp1 $ twInputs tw)
-      )
-      txWitnesses
+    inputDelta =
+      concatMap
+        ( \tw →
+            map
+              (\(entry :*: _) → fe $ packIndex (SymMerkle.position entry))
+              (fromVector $ unComp1 $ twInputs tw)
+        )
+        txWitnesses
 
     -- Output delta: (isActive, packedPosition, newHash) per output per transaction
     -- NOTE: orIndex uses symbolic zero/one arithmetic (matching updateLedgerState).
     txs = fromVector (tbTransactions batch)
-    outputDelta = concatMap
-      (\(tx, tw) →
-        let txId' = txId tx & hHash
-         in concatMap
-              (\(output :*: bout, entry, ix) →
-                let isBout = bout /= (false ∷ ZkBool.Bool RollupBFInterpreter)
-                    isNull = output == nullOutput
-                    isActive = not isBout && not isNull
-                    pos = packIndex (SymMerkle.position entry)
-                    utxo = UTxO {uRef = OutputRef {orTxId = txId', orIndex = ix}, uOutput = output}
-                    utxoHash = hash utxo & hHash
-                 in [ if isActive then 1 else 0
-                    , fe pos
-                    , fe utxoHash
-                    ]
-              )
-              (zip3 (fromVector $ unComp1 $ outputs tx)
-                    (fromVector $ unComp1 $ twOutputs tw)
-                    (iterate (Algebra.+ one) zero))
-      )
-      (zip txs txWitnesses)
-   in biDelta <> inputDelta <> outputDelta
+    outputDelta =
+      concatMap
+        ( \(tx, tw) →
+            let txId' = txId tx & hHash
+             in concatMap
+                  ( \(output :*: bout, entry, ix) →
+                      let isBout = bout /= (false ∷ ZkBool.Bool RollupBFInterpreter)
+                          isNull = output == nullOutput
+                          isActive = not isBout && not isNull
+                          pos = packIndex (SymMerkle.position entry)
+                          utxo = UTxO {uRef = OutputRef {orTxId = txId', orIndex = ix}, uOutput = output}
+                          utxoHash = hash utxo & hHash
+                       in [ if isActive then 1 else 0
+                          , fe pos
+                          , fe utxoHash
+                          ]
+                  )
+                  ( zip3
+                      (fromVector $ unComp1 $ outputs tx)
+                      (fromVector $ unComp1 $ twOutputs tw)
+                      (iterate (Algebra.+ one) zero)
+                  )
+        )
+        (zip txs txWitnesses)
+   in
+    biDelta <> inputDelta <> outputDelta

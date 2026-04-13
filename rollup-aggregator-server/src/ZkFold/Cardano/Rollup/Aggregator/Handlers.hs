@@ -81,6 +81,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   BridgeOutsResponse (..),
   ConvertAddressRequest (..),
   ConvertAddressResponse (..),
+  A,
   I,
   PendingTxsResponse (..),
   QueryL2UtxosResponse (..),
@@ -97,15 +98,6 @@ import ZkFold.Cardano.Rollup.Aggregator.Types (
   TxsByAddressResponse (..),
   txParameters,
  )
-import ZkFold.Cardano.Rollup.Api
-import ZkFold.Data.Vector (fromVector)
-import ZkFold.Symbolic.Data.Bool (fromBool)
-import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Ledger.Types (nullUTxOHash)
-import ZkFold.Symbolic.Data.Hash (Hashable (..))
-import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
-import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..), UTxO (..))
-import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
 
 -- | Server implementation for the aggregator API.
 aggregatorServer ∷ Ctx → ServerT AggregatorAPI IO

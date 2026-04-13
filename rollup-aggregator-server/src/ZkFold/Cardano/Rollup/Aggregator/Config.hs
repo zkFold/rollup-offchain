@@ -94,6 +94,8 @@ data ServerConfig = ServerConfig
   -- ^ SQLite database file path for the transaction queue and ledger state.
   , scNodeSocketPath ∷ !FilePath
   -- ^ Path to the cardano-node socket. Used for chain sync.
+  , scHalo2ProverExe ∷ !FilePath
+  -- ^ Path to the Symbolic-Halo2 bridge prover executable 
   }
   deriving stock Generic
   deriving

@@ -55,7 +55,6 @@ withCtx mConfigPath action = do
     let stakeValConfig =
           ZKRollupStakeValConfig
             { zkrsvcNFT = nftToken
-            , zkrsvcSetupBytes = scSetupBytes serverConfig
             , zkrsvcMaxBridgeIn = scMaxBridgeIn serverConfig
             , zkrsvcMaxBridgeOut = scMaxBridgeOut serverConfig
             , zkrsvcMaxOutputAssets = scMaxOutputAssets serverConfig
@@ -83,6 +82,7 @@ withCtx mConfigPath action = do
             , ctxBatchConfig = scBatchConfig serverConfig
             , ctxDbPath = scDbPath serverConfig
             , ctxNodeSocketPath = scNodeSocketPath serverConfig
+            , ctxHalo2ProverExe = scHalo2ProverExe serverConfig
             }
     action serverConfig ctx
 
