@@ -44,12 +44,13 @@ import Database.SQLite.Simple
 import Deriving.Aeson
 import GHC.Natural (Natural)
 import GeniusYield.Types (GYAddress, LowerFirst)
-import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Data.Vector (fromVector)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Ledger.Types
+
+import ZkFold.Cardano.Rollup.Aggregator.Types
 
 -- | State persisted to the SQLite database across restarts.
 -- Stores the rollup 'State' and leaf hashes (not full UTxO preimages).

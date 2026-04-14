@@ -119,6 +119,22 @@ components:
       required:
       - entries
       type: object
+    ConvertAddressRequest:
+      description: Request parameters to convert Cardano address into a dummy L2 address
+      properties:
+        address:
+          $ref: '#/components/schemas/GYAddressBech32'
+      required:
+      - address
+      type: object
+    ConvertAddressResponse:
+      description: Dummy L2 address corresponding to a Cardano address
+      properties:
+        l2_address:
+          type: integer
+      required:
+      - l2_address
+      type: object
     GYAddressBech32:
       description: An address, serialised as Bech32.
       example: addr_test1qrsuhwqdhz0zjgnf46unas27h93amfghddnff8lpc2n28rgmjv8f77ka0zshfgssqr5cnl64zdnde5f8q2xt923e7ctqu49mg5
@@ -288,6 +304,37 @@ components:
       required:
       - inputs
       - outputs
+      type: object
+    TxHashRequest:
+      description: Calculate the hash of an L2 transaction
+      properties:
+        transaction:
+          $ref: '#/components/schemas/Transaction_2_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+      required:
+      - transaction
+      type: object
+    TxHashResponse:
+      description: The hash of on L2 transaction
+      properties:
+        hash:
+          type: integer
+      required:
+      - hash
+      type: object
+    TxParametersResponse:
+      description: The hash of on L2 transaction
+      properties:
+        assets:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+        inputs:
+          exclusiveMinimum: false
+          minimum: 0
+          type: integer
+      required:
+      - inputs
+      - assets
       type: object
     TxRecord:
       description: A transaction record with status information
@@ -496,6 +543,29 @@ paths:
       summary: Health check
       tags:
       - Settings
+  /v0/l1/address/convert:
+    post:
+      description: In bridge-out transactions, the L2 address in the transaction outputs
+        must be obtained from an L1 Cardano address using this endpoint. The resulting
+        L2 address will only be a dummy address and must not be used anywhere other
+        than bridge-out transactions.
+      requestBody:
+        content:
+          application/json;charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ConvertAddressRequest'
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ConvertAddressResponse'
+          description: ''
+        '400':
+          description: Invalid `body`
+      summary: Obtain Symbolic representation of a Cardano address
+      tags:
+      - Address
   /v0/l1/tx/submit:
     post:
       description: Attach a witness to a previously built L1 transaction (e.g. a bridge-in)
@@ -551,6 +621,39 @@ paths:
         '400':
           description: Invalid `body`
       summary: Submit L2 transaction
+      tags:
+      - Transactions
+  /v0/tx/hash:
+    post:
+      requestBody:
+        content:
+          application/json;charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/TxHashRequest'
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TxHashResponse'
+          description: ''
+        '400':
+          description: Invalid `body`
+      summary: Get hash of an L2 transaction
+      tags:
+      - Transactions
+  /v0/tx/parameters:
+    get:
+      description: Obtain the supported number of inputs, outputs and assets in L2
+        trasactions.
+      responses:
+        '200':
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TxParametersResponse'
+          description: ''
+      summary: Obtain transaction parameters
       tags:
       - Transactions
   /v0/tx/{hash}:
@@ -653,7 +756,13 @@ paths:
 tags:
 - description: Endpoint to check if the server is healthy.
   name: Settings
+- description: Convert L1 address to a dummy L2 address.
+  name: Address
 - description: Submit a single L2 transaction for batching.
+  name: Transactions
+- description: Calculate hash of an L2 transaction.
+  name: Transactions
+- description: Obtain current transaction parameters.
   name: Transactions
 - description: Bridge operations.
   name: Bridge

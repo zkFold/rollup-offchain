@@ -17,12 +17,18 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   -- * API Types
   SubmitTxRequest (..),
   SubmitTxResponse (..),
+  TxHashRequest (..),
+  TxHashResponse (..),
+  TxParametersResponse (..),
+  txParameters,
   BridgeInRequest (..),
   BridgeInResponse (..),
   SubmitL1TxRequest (..),
   SubmitL1TxResponse (..),
   QueryL2UtxosResponse (..),
   StateInfoResponse (..),
+  ConvertAddressRequest (..),
+  ConvertAddressResponse (..),
 
   -- * Indexing Types
   TxStatus (..),
@@ -52,12 +58,14 @@ import GHC.TypeNats (type (^))
 import GeniusYield.Swagger.Utils (dropSymbolAndCamelToSnake)
 import GeniusYield.Types (GYAddress, GYAddressBech32, GYTx, GYTxId, GYTxWitness, GYValue, LowerFirst)
 import GeniusYield.Types.OpenApi ()
-import ZkFold.Cardano.Rollup.Aggregator.Orphans ()
+import ZkFold.Algebra.Number (Natural, value)
 import ZkFold.Data.Vector (Vector)
 import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Ledger.Types
 import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
 import ZkFold.Symbolic.Ledger.Types.Orphans ()
+
+import ZkFold.Cardano.Rollup.Aggregator.Orphans ()
 
 type I = RollupBFInterpreter
 
@@ -95,10 +103,53 @@ data QueuedTx = QueuedTx
   deriving stock Generic
   deriving
     (FromJSON, ToJSON)
-    via CustomJSON '[FieldLabelModifier '[StripPrefix "qt", LowerFirst]] QueuedTx
+    via CustomJSON '[FieldLabelModifier '[StripPrefix "qt", CamelToSnake]] QueuedTx
 
 instance ToSchema QueuedTx where
   declareNamedSchema _ = return $ NamedSchema (Just "QueuedTx") mempty
+
+type ConvertAddressPrefix ∷ Symbol
+type ConvertAddressPrefix = "car"
+
+newtype ConvertAddressRequest = ConvertAddressRequest
+  { carAddress ∷ GYAddressBech32
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix ConvertAddressPrefix, CamelToSnake]] ConvertAddressRequest
+
+instance ToSchema ConvertAddressRequest where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @ConvertAddressPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Request parameters to convert Cardano address into a dummy L2 address"
+
+newtype ConvertAddressResponse = ConvertAddressResponse
+  { carL2Address ∷ FieldElement RollupBFInterpreter
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix ConvertAddressPrefix, CamelToSnake]] ConvertAddressResponse
+
+instance ToSchema ConvertAddressResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @ConvertAddressPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Dummy L2 address corresponding to a Cardano address"
 
 type SubmitTxReqPrefix ∷ Symbol
 type SubmitTxReqPrefix = "str"
@@ -150,6 +201,82 @@ instance ToSchema SubmitTxResponse where
     return $
       schema
         & OpenApi.schema . OpenApi.description ?~ "Response to the L2 transaction submission"
+
+type TxHashReqPrefix ∷ Symbol
+type TxHashReqPrefix = "thr"
+
+newtype TxHashRequest = TxHashRequest
+  { thrTransaction ∷ Tx
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxHashReqPrefix, CamelToSnake]] TxHashRequest
+
+instance ToSchema TxHashRequest where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @TxHashReqPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "Calculate the hash of an L2 transaction"
+
+type TxHashResPrefix ∷ Symbol
+type TxHashResPrefix = "thr"
+
+newtype TxHashResponse = TxHashResponse
+  { thrHash ∷ FieldElement RollupBFInterpreter
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxHashResPrefix, CamelToSnake]] TxHashResponse
+
+instance ToSchema TxHashResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @TxHashResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "The hash of on L2 transaction"
+
+type TxParametersPrefix ∷ Symbol
+type TxParametersPrefix = "tpr"
+
+data TxParametersResponse = TxParametersResponse
+  { tprInputs ∷ !Natural
+  , tprAssets ∷ !Natural
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix TxParametersPrefix, CamelToSnake]] TxParametersResponse
+
+instance ToSchema TxParametersResponse where
+  declareNamedSchema proxy = do
+    schema ←
+      OpenApi.genericDeclareNamedSchema
+        OpenApi.defaultSchemaOptions
+          { OpenApi.fieldLabelModifier = dropSymbolAndCamelToSnake @TxHashResPrefix
+          }
+        proxy
+    return $
+      schema
+        & OpenApi.schema . OpenApi.description ?~ "The hash of on L2 transaction"
+
+txParameters ∷ TxParametersResponse
+txParameters = TxParametersResponse {..}
+ where
+  tprInputs = value @N
+  tprAssets = value @A
 
 type BridgeInReqPrefix ∷ Symbol
 type BridgeInReqPrefix = "bir"
@@ -298,7 +425,7 @@ instance ToSchema StateInfoResponse where
 -- ---------------------------------------------------------------------------
 
 data TxStatus = TxPending | TxProcessing | TxBatched
-  deriving stock (Eq, Show, Generic)
+  deriving stock (Eq, Generic, Show)
   deriving
     (FromJSON, ToJSON)
     via CustomJSON '[ConstructorTagModifier '[StripPrefix "Tx", LowerFirst]] TxStatus

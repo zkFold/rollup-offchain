@@ -20,6 +20,13 @@ import Servant
 import Servant.Server.Experimental.Auth (AuthHandler)
 import Servant.Server.Internal.ServerError (responseServerError)
 import System.TimeManager (TimeoutThread (..))
+import ZkFold.Cardano.Rollup.Constants (zkRollupBuildInfo)
+import ZkFold.Cardano.Rollup.Types (
+  ZKInitializedRollupBuildInfo (..),
+  ZKRollupBuildInfo (..),
+  ZKRollupStakeValConfig (..),
+ )
+
 import ZkFold.Cardano.Rollup.Aggregator.Api
 import ZkFold.Cardano.Rollup.Aggregator.Auth
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initBatcherState, startBatcher)
@@ -32,12 +39,6 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (initDb)
 import ZkFold.Cardano.Rollup.Aggregator.RequestLoggerMiddleware (gcpReqLogger)
 import ZkFold.Cardano.Rollup.Aggregator.SwaggerUI (swaggerUIHtml)
 import ZkFold.Cardano.Rollup.Aggregator.Utils
-import ZkFold.Cardano.Rollup.Constants (zkRollupBuildInfo)
-import ZkFold.Cardano.Rollup.Types (
-  ZKInitializedRollupBuildInfo (..),
-  ZKRollupBuildInfo (..),
-  ZKRollupStakeValConfig (..),
- )
 
 -- | Build a 'Ctx' from configuration and pass it to a continuation.
 withCtx ∷ Maybe FilePath → (ServerConfig → Ctx → IO ()) → IO ()

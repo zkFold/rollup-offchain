@@ -4,7 +4,9 @@ module ZkFold.Cardano.Rollup.Aggregator.Handlers (
 
   -- * Individual Handlers
   handleHealth,
+  handleConvertAddress,
   handleSubmitTx,
+  handleTxHash,
   handleBridgeIn,
   handleSubmitL1Tx,
   handleStateInfo,
@@ -46,6 +48,14 @@ import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..))
 import PlutusLedgerApi.V1.Value qualified as Plutus
 import Servant (ServerError (..), ServerT, err400, err404, (:<|>) (..))
 import ZkFold.Algebra.Class (fromConstant, one)
+import ZkFold.Cardano.Rollup.Api
+import ZkFold.Data.Vector (fromVector)
+import ZkFold.Symbolic.Data.Bool (fromBool)
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
+import ZkFold.Symbolic.Data.Hash (hHash)
+import ZkFold.Symbolic.Ledger.Types
+import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
+
 import ZkFold.Cardano.Rollup.Aggregator.Api (AggregatorAPI)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (enqueueTx)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (
@@ -63,21 +73,40 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   loadState,
   lookupPreimagesDb,
  )
-import ZkFold.Cardano.Rollup.Aggregator.Types (A, BatchDetailResponse (..), BatchesResponse (..), BridgeInRequest (..), BridgeInResponse (..), BridgeOutsResponse (..), I, PendingTxsResponse (..), QueryL2UtxosResponse (..), QueuedTx (..), StateInfoResponse (..), SubmitL1TxRequest (..), SubmitL1TxResponse (..), SubmitTxRequest (..), SubmitTxResponse (..), TxResponse (..), TxsByAddressResponse (..))
-import ZkFold.Cardano.Rollup.Api
-import ZkFold.Data.Vector (fromVector)
-import ZkFold.Symbolic.Data.Bool (fromBool)
-import ZkFold.Symbolic.Data.FieldElement (FieldElement)
-import ZkFold.Symbolic.Ledger.Types (nullUTxOHash)
-import ZkFold.Symbolic.Ledger.Types.Field (RollupBFInterpreter)
-import ZkFold.Symbolic.Ledger.Types.Transaction.Core (Output (..), Transaction (..), UTxO (..))
-import ZkFold.Symbolic.Ledger.Types.Value (AssetValue (..))
+import ZkFold.Cardano.Rollup.Aggregator.Types (
+  A,
+  BatchDetailResponse (..),
+  BatchesResponse (..),
+  BridgeInRequest (..),
+  BridgeInResponse (..),
+  BridgeOutsResponse (..),
+  ConvertAddressRequest (..),
+  ConvertAddressResponse (..),
+  I,
+  PendingTxsResponse (..),
+  QueryL2UtxosResponse (..),
+  QueuedTx (..),
+  StateInfoResponse (..),
+  SubmitL1TxRequest (..),
+  SubmitL1TxResponse (..),
+  SubmitTxRequest (..),
+  SubmitTxResponse (..),
+  TxHashRequest (..),
+  TxHashResponse (..),
+  TxParametersResponse (..),
+  TxResponse (..),
+  TxsByAddressResponse (..),
+  txParameters,
+ )
 
 -- | Server implementation for the aggregator API.
 aggregatorServer ∷ Ctx → ServerT AggregatorAPI IO
 aggregatorServer ctx =
   handleHealth ctx
+    :<|> handleConvertAddress ctx
     :<|> handleSubmitTx ctx
+    :<|> handleTxHash ctx
+    :<|> handleTxParameters ctx
     :<|> handleBridgeIn ctx
     :<|> handleSubmitL1Tx ctx
     :<|> handleStateInfo ctx
@@ -92,6 +121,15 @@ aggregatorServer ctx =
 -- | Handle health check requests.
 handleHealth ∷ Ctx → IO ()
 handleHealth _ctx = pure ()
+
+handleConvertAddress ∷ Ctx → ConvertAddressRequest → IO ConvertAddressResponse
+handleConvertAddress _ ConvertAddressRequest {..} = pure $ ConvertAddressResponse $ bech32ToFE carAddress
+
+bech32ToFE ∷ GYAddressBech32 → FieldElement RollupBFInterpreter
+bech32ToFE addrBech32 = expectedAddrFe
+ where
+  addr = addressFromBech32 addrBech32
+  expectedAddrFe = fromConstant $ byteStringToInteger' $ addressToBS $ addressToPlutus addr
 
 -- | Handle L2 transaction submission.
 handleSubmitTx ∷ Ctx → SubmitTxRequest → IO SubmitTxResponse
@@ -111,12 +149,17 @@ handleSubmitTx ctx SubmitTxRequest {..} = do
               txHash ← enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs strInputUtxos
               pure $ SubmitTxResponse "queued" txHash
  where
-  validateAddr (out :*: _, (_, addrBech32)) =
-    let addr = addressFromBech32 addrBech32
-        expectedAddrFe = fromConstant $ byteStringToInteger' $ addressToBS $ addressToPlutus addr
-     in expectedAddrFe == oAddress out
+  validateAddr (out :*: _, (_, addrBech32)) = bech32ToFE addrBech32 == oAddress out
 
   validateValue (out :*: _, (val, _)) = matchesBridgeOutValue out val
+
+handleTxHash ∷ Ctx → TxHashRequest → IO TxHashResponse
+handleTxHash _ctx TxHashRequest {..} = pure $ TxHashResponse {..}
+ where
+  thrHash = hHash . txId $ thrTransaction
+
+handleTxParameters ∷ Ctx → IO TxParametersResponse
+handleTxParameters _ctx = pure txParameters
 
 -- | Check if a 'GYValue' matches the symbolic assets of an 'Output'.
 matchesBridgeOutValue ∷ KnownNat a ⇒ Output a I → GYValue → Bool
@@ -152,8 +195,8 @@ handleBridgeIn ctx BridgeInRequest {..} = do
 handleSubmitL1Tx ∷ Ctx → SubmitL1TxRequest → IO SubmitL1TxResponse
 handleSubmitL1Tx ctx SubmitL1TxRequest {..} = do
   let txWithWitness = appendWitnessGYTx sl1trWitness sl1trTransaction
-  txId ← gySubmitTx (ctxProviders ctx) txWithWitness
-  pure $ SubmitL1TxResponse txId
+  submittedTxId ← gySubmitTx (ctxProviders ctx) txWithWitness
+  pure $ SubmitL1TxResponse submittedTxId
 
 -- | Handle rollup state info query.
 handleStateInfo ∷ Ctx → IO StateInfoResponse
