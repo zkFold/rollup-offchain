@@ -48,6 +48,7 @@ import GeniusYield.TxBuilder (buildTxBody, runGYTxMonadIO, signAndSubmitConfirme
 import GeniusYield.TxBuilder.Errors (GYTxMonadException)
 import GeniusYield.Types (
   GYAwaitTxException,
+  GYProviders,
   GYTxId,
   GYValue,
   filterUTxOs,
@@ -80,10 +81,9 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   loadStateHistory,
   lookupPreimagesByRefDb,
   lookupPreimagesDb,
-  recordBatchDb,
   revertProcessingTxsDb,
   revertTxsDb,
-  savePreimagesDb,
+  saveBatchResultDb,
   seedPreimageDbFromOldState,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types
@@ -429,8 +429,8 @@ waitForChainSync Ctx {..} BatcherState {..} lastChainSyncLenRef = do
 --   * nullUTxOHash → nullUTxO (empty slot, no DB lookup needed)
 --   * found in DB → the stored UTxO
 --   * not found in DB → nullUTxO (unknown external UTxO)
-constructPreimage ∷ FilePath → Leaves Ud (FieldElement I) → IO (Leaves Ud (UTxO A I))
-constructPreimage dbPath leafHashes = do
+constructPreimage ∷ GYProviders → FilePath → Leaves Ud (FieldElement I) → IO (Leaves Ud (UTxO A I))
+constructPreimage providers dbPath leafHashes = do
   let nullHash = nullUTxOHash @A @I
       hashList = fromVector leafHashes
       nonNullHashes = filter (/= nullHash) hashList
@@ -440,7 +440,7 @@ constructPreimage dbPath leafHashes = do
   when (missed > 0) $
     -- This indicates a key mismatch between what ChainSync stored
     -- (from delta) and what the Batcher stored (from updateLedgerState).
-    putStrLn $
+    gyLogWarning providers mempty $
       "constructPreimage: "
         <> show missed
         <> " of "
@@ -465,7 +465,7 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
   (prevState, prevLeafHashes) ←
     atomically $
       (,) <$> readTVar bsLedgerStateVar <*> readTVar bsLeafHashesVar
-  prevUtxoPreimage ← constructPreimage ctxDbPath prevLeafHashes
+  prevUtxoPreimage ← constructPreimage ctxProviders ctxDbPath prevLeafHashes
   let prevTree = SymMerkle.fromLeaves (fmap (hHash . hash) prevUtxoPreimage)
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
@@ -499,7 +499,6 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         | utxo ← fromVector newPreimage
         , utxo /= nullUTxO @A @I
         ]
-  savePreimagesDb ctxDbPath newEntries
   -- Submit the L1 transaction.
   submittedTxId ←
     runGYTxMonadIO
@@ -519,6 +518,6 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus delta) ctxRollupBuildInfo
         body ← buildTxBody skel
         signAndSubmitConfirmed body
-  -- ChainSync will update state/leafHashes/tree TVars when it sees the block.
-  recordBatchDb ctxDbPath ids (Text.pack (show submittedTxId))
+  -- Atomically: store preimages + record batch + mark txs as batched.
+  saveBatchResultDb ctxDbPath newEntries ids (Text.pack (show submittedTxId))
   pure submittedTxId

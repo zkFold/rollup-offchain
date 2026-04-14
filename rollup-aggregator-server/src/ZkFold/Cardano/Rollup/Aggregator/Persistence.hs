@@ -4,7 +4,6 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   enqueueTxDb,
   dequeueTxsDb,
   dequeueAvailableTxsDb,
-  recordBatchDb,
   revertTxsDb,
   revertProcessingTxsDb,
   getPendingTxsWithIdsDb,
@@ -15,18 +14,13 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   getBatchesDb,
   getBatchByIdDb,
   getPendingBridgeOutsDb,
-  saveState,
   loadState,
-  saveStateHistory,
   loadStateHistory,
-  pruneStateHistory,
-  saveCheckpoint,
   loadCheckpoint,
-  clearCheckpoint,
   saveRollupUpdateDb,
   saveRollbackDb,
   saveResetToGenesisDb,
-  savePreimagesDb,
+  saveBatchResultDb,
   lookupPreimagesDb,
   lookupPreimagesByRefDb,
   getKnownRefsDb,
@@ -213,22 +207,6 @@ dequeueAvailableTxsDb dbPath n = withConn dbPath $ \conn →
             (Only rowId)
         return (zip (map fst rows) qtxs)
 
--- | Record a successfully submitted batch: insert a 'batches' row and mark
--- all included txs as 'batched'.
-recordBatchDb ∷ FilePath → [Int64] → Text → IO ()
-recordBatchDb dbPath ids l1TxId = withConn dbPath $ \conn →
-  withTransaction conn $ do
-    now ← getCurrentTime
-    execute
-      conn
-      "INSERT INTO batches (l1_tx_id, created_at, tx_count) VALUES (?, ?, ?)"
-      (l1TxId, formatTimestamp now, length ids)
-    batchId ← lastInsertRowId conn
-    forM_ ids $ \tid →
-      execute
-        conn
-        "UPDATE txs SET status='batched', batch_id=? WHERE id=?"
-        (batchId, tid)
 
 -- | Revert 'processing' txs back to 'pending' (called on batch failure).
 revertTxsDb ∷ FilePath → [Int64] → IO ()
@@ -398,21 +376,6 @@ txStatusFromText "processing" = Just TxProcessing
 txStatusFromText "batched" = Just TxBatched
 txStatusFromText _ = Nothing
 
--- ---------------------------------------------------------------------------
--- Ledger state persistence
--- ---------------------------------------------------------------------------
-
--- | Persist ledger state and leaf hashes to the database (single-row upsert).
--- Called by ChainSync after each rollup state update on-chain.
-saveState ∷ FilePath → State I → Leaves Ud (FieldElement I) → IO ()
-saveState dbPath ledgerState leafHashes = withConn dbPath $ \conn →
-  execute
-    conn
-    "INSERT OR REPLACE INTO ledger_state (id, ledger_state, utxo_preimage) VALUES (1, ?, ?)"
-    (toText ledgerState, toText leafHashes)
- where
-  toText ∷ ToJSON a ⇒ a → Text
-  toText = decodeUtf8 . toStrict . encode
 
 -- | Load persisted state. Handles migration from the old format (UTxO preimage)
 -- to the new format (leaf hashes) by converting if necessary.
@@ -437,24 +400,8 @@ loadState dbPath = withConn dbPath $ \conn → do
     _ → return Nothing
 
 -- ---------------------------------------------------------------------------
--- Rollback history persistence
+-- Rollback history persistence (read-only)
 -- ---------------------------------------------------------------------------
-
--- | Persist a single state snapshot for rollback recovery, and prune to 20 entries.
-saveStateHistory ∷ FilePath → Word64 → State I → Leaves Ud (FieldElement I) → IO ()
-saveStateHistory dbPath slotNo ledgerState leafHashes = withConn dbPath $ \conn → do
-  execute
-    conn
-    "INSERT OR REPLACE INTO state_history (slot_no, ledger_state, leaf_hashes) VALUES (?, ?, ?)"
-    (slotNo, toText ledgerState, toText leafHashes)
-  -- Cap at 20 entries.
-  execute_
-    conn
-    "DELETE FROM state_history WHERE slot_no NOT IN \
-    \(SELECT slot_no FROM state_history ORDER BY slot_no DESC LIMIT 20)"
- where
-  toText ∷ ToJSON a ⇒ a → Text
-  toText = decodeUtf8 . toStrict . encode
 
 -- | Load persisted state history, most recent first (matching TVar ordering).
 loadStateHistory ∷ FilePath → IO [(Word64, State I, Leaves Ud (FieldElement I))]
@@ -468,24 +415,9 @@ loadStateHistory dbPath = withConn dbPath $ \conn → do
       (Right st, Right lh) → Just (slotNo, st, lh)
       _ → Nothing
 
--- | Delete all history snapshots newer than the target slot.
--- Called after a rollback to keep the DB in sync with the TVar.
-pruneStateHistory ∷ FilePath → Word64 → IO ()
-pruneStateHistory dbPath targetSlot = withConn dbPath $ \conn →
-  execute conn "DELETE FROM state_history WHERE slot_no > ?" (Only targetSlot)
-
 -- ---------------------------------------------------------------------------
--- Chain sync checkpoint
+-- Chain sync checkpoint (read-only)
 -- ---------------------------------------------------------------------------
-
--- | Persist the chain sync resume point (slot + hex-encoded block hash).
--- Called after each rollup state update so restarts skip already-processed blocks.
-saveCheckpoint ∷ FilePath → Word64 → Text → IO ()
-saveCheckpoint dbPath slotNo blockHash = withConn dbPath $ \conn →
-  execute
-    conn
-    "INSERT OR REPLACE INTO chain_checkpoint (id, slot_no, block_hash) VALUES (1, ?, ?)"
-    (slotNo, blockHash)
 
 -- | Load the persisted chain sync checkpoint.
 loadCheckpoint ∷ FilePath → IO (Maybe (Word64, Text))
@@ -495,11 +427,6 @@ loadCheckpoint dbPath = withConn dbPath $ \conn → do
   case rows of
     [(s, h)] → pure (Just (s, h))
     _ → pure Nothing
-
--- | Clear the chain sync checkpoint (used on reset-to-genesis).
-clearCheckpoint ∷ FilePath → IO ()
-clearCheckpoint dbPath = withConn dbPath $ \conn →
-  execute_ conn "DELETE FROM chain_checkpoint WHERE id = 1"
 
 -- ---------------------------------------------------------------------------
 -- Atomic composite writes (single transaction)
@@ -516,8 +443,10 @@ saveRollupUpdateDb
   → State I
   → Leaves Ud (FieldElement I)
   -- ^ History snapshot: slot, pre-update state and leaf hashes.
+  → Maybe (Word64, Text)
+  -- ^ Optional checkpoint (slot, hex-encoded block hash) to persist atomically.
   → IO ()
-saveRollupUpdateDb dbPath newState newLeafHashes histSlot histState histLeafHashes =
+saveRollupUpdateDb dbPath newState newLeafHashes histSlot histState histLeafHashes mCheckpoint =
   withConn dbPath $ \conn → withTransaction conn $ do
     execute
       conn
@@ -531,6 +460,13 @@ saveRollupUpdateDb dbPath newState newLeafHashes histSlot histState histLeafHash
       conn
       "DELETE FROM state_history WHERE slot_no NOT IN \
       \(SELECT slot_no FROM state_history ORDER BY slot_no DESC LIMIT 20)"
+    case mCheckpoint of
+      Just (cpSlot, cpHash) →
+        execute
+          conn
+          "INSERT OR REPLACE INTO chain_checkpoint (id, slot_no, block_hash) VALUES (1, ?, ?)"
+          (cpSlot, cpHash)
+      Nothing → pure ()
  where
   toText ∷ ToJSON a ⇒ a → Text
   toText = decodeUtf8 . toStrict . encode
@@ -568,19 +504,31 @@ saveResetToGenesisDb dbPath initState initLeafHashes =
 -- Preimage DB: hash → UTxO mapping
 -- ---------------------------------------------------------------------------
 
--- | Store UTxO preimages in the database, keyed by their leaf hash.
--- This is the Batcher → ChainSync communication channel: the Batcher stores
--- preimages for UTxOs it creates; ChainSync (or rather, the next Batcher
--- iteration) looks them up to reconstruct the preimage vector.
--- Append-only: a UTxO's hash never changes, so entries never need updating.
-savePreimagesDb ∷ FilePath → [(FieldElement I, OutputRef I, UTxO A I)] → IO ()
-savePreimagesDb dbPath entries = withConn dbPath $ \conn →
-  withTransaction conn $
-    forM_ entries $ \(leafHash, ref, utxo) →
+-- | Atomically store preimages + record batch + mark txs as batched.
+-- Combines what was previously three separate operations ('savePreimagesDb',
+-- 'recordBatchDb') into a single transaction for crash safety.
+saveBatchResultDb ∷ FilePath → [(FieldElement I, OutputRef I, UTxO A I)] → [Int64] → Text → IO ()
+saveBatchResultDb dbPath preimageEntries txIds l1TxId = withConn dbPath $ \conn →
+  withTransaction conn $ do
+    -- 1. Store preimages.
+    forM_ preimageEntries $ \(leafHash, ref, utxo) →
       execute
         conn
         "INSERT OR IGNORE INTO utxo_preimages (leaf_hash, output_ref, utxo_data) VALUES (?, ?, ?)"
         (toText leafHash, toText ref, toText utxo)
+    -- 2. Record batch.
+    now ← getCurrentTime
+    execute
+      conn
+      "INSERT INTO batches (l1_tx_id, created_at, tx_count) VALUES (?, ?, ?)"
+      (l1TxId, formatTimestamp now, length txIds)
+    batchId ← lastInsertRowId conn
+    -- 3. Mark txs as batched.
+    forM_ txIds $ \tid →
+      execute
+        conn
+        "UPDATE txs SET status='batched', batch_id=? WHERE id=?"
+        (batchId, tid)
  where
   toText ∷ ToJSON a ⇒ a → Text
   toText = decodeUtf8 . toStrict . encode

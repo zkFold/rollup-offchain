@@ -44,8 +44,9 @@ import ZkFold.Algebra.Class (FromConstant (..))
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
 import Data.Proxy (Proxy (..))
+import Data.Text (Text)
 import Data.Text.Encoding qualified as Text
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (loadCheckpoint, saveCheckpoint, saveResetToGenesisDb, saveRollbackDb, saveRollupUpdateDb)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (loadCheckpoint, saveResetToGenesisDb, saveRollbackDb, saveRollupUpdateDb)
 import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
@@ -247,9 +248,10 @@ handleRollForward ctx bs ss (Api.BlockInMode Api.ConwayEra block) = do
           gyLogInfo (ctxProviders ctx) mempty $
             "Chain sync: applying state update (chain len " <> show localChainLen
               <> " → " <> show onChainLen <> ", slot " <> show slot <> ")"
-          applyRollupUpdate ctx bs slot rsuNewRollupState rsuDelta
-          -- Track this block for lagged checkpointing.
-          updateCheckpoint ctx ss slot blockHash
+          -- Compute checkpoint data (if the buffer is full) before persisting,
+          -- so state + history + checkpoint are saved atomically.
+          mCheckpoint ← updateCheckpoint ss slot blockHash
+          applyRollupUpdate ctx bs ss slot rsuNewRollupState rsuDelta mCheckpoint
       | isAlreadySeen → pure () -- Replay after restart, already processed.
       | isGap → do
           -- State discontinuity: we missed update(s). This means our persisted
@@ -274,23 +276,22 @@ handleRollForward ctx bs ss (Api.BlockInMode Api.ConwayEra block) = do
 handleRollForward _ _ _ _ = pure () -- Ignore non-Conway blocks.
 
 -- | Push a new (slot, blockHash) onto the recent-blocks buffer. When the buffer
--- reaches 'checkpointDepth', persist the oldest entry as the safe checkpoint.
+-- reaches 'checkpointDepth', return the oldest entry as the safe checkpoint.
+-- The caller persists it atomically with the state update.
 -- This ensures the checkpoint is always at least 'checkpointDepth' rollup updates
 -- behind the tip, making it effectively immune to rollbacks.
-updateCheckpoint ∷ Ctx → SyncState → Word64 → Api.Hash Api.BlockHeader → IO ()
-updateCheckpoint ctx SyncState {..} slot blockHash = do
+updateCheckpoint ∷ SyncState → Word64 → Api.Hash Api.BlockHeader → IO (Maybe (Word64, Text))
+updateCheckpoint SyncState {..} slot blockHash = do
   recent ← readIORef ssRecentBlocksRef
   let recent' = take checkpointDepth ((slot, blockHash) : recent)
   writeIORef ssRecentBlocksRef recent'
-  -- Only persist when the buffer is full — the oldest entry is the safe checkpoint.
+  -- Only return a checkpoint when the buffer is full — the oldest entry is the safe checkpoint.
   if length recent' >= checkpointDepth
     then do
       let (safeSlot, safeHash) = last recent'
           hashHex = Text.decodeLatin1 (Api.serialiseToRawBytesHex safeHash)
-          cp = Api.ChainPoint (Api.SlotNo safeSlot) safeHash
-      saveCheckpoint (ctxDbPath ctx) safeSlot hashHex
-      writeIORef ssCheckpointRef cp
-    else pure ()
+      pure (Just (safeSlot, hashHex))
+    else pure Nothing
 
 -- | Reset all state to genesis (initial state, empty tree, empty history).
 -- Persists the reset to SQLite so it survives a crash.
@@ -387,16 +388,20 @@ findRollupUpdate (GYNonAdaToken nftMP nftTN) (Api.Tx txBody _) =
 
 -- | Apply a rollup state update: update leaf hashes from the delta, rebuild
 -- the Merkle tree, and update the State. Saves a snapshot for rollback recovery.
+-- Also persists the checkpoint (if provided) atomically with the state update.
 applyRollupUpdate
   ∷ Ctx
   → BatcherState
+  → SyncState
   → Word64
   -- ^ Slot number of the block containing this update.
   → RollupState
   → [Integer]
   -- ^ Tree delta.
+  → Maybe (Word64, Text)
+  -- ^ Optional checkpoint to persist atomically with the state update.
   → IO ()
-applyRollupUpdate ctx bs slot newRollupState delta = do
+applyRollupUpdate ctx bs ss slot newRollupState delta mCheckpoint = do
   let biCount = 1 ∷ Int -- Bi
       txCount = 2 ∷ Int -- TxCount
       nCount = 2 ∷ Int -- N
@@ -430,8 +435,15 @@ applyRollupUpdate ctx bs slot newRollupState delta = do
     writeTVar (bsStateHistoryVar bs) $
       take 20 ((slot, currentState, currentLeafHashes) : history)
 
-  -- Persist state + history snapshot atomically.
-  saveRollupUpdateDb (ctxDbPath ctx) newState newLeafHashes slot currentState currentLeafHashes
+  -- Persist state + history snapshot + checkpoint atomically.
+  saveRollupUpdateDb (ctxDbPath ctx) newState newLeafHashes slot currentState currentLeafHashes mCheckpoint
+  -- Update the in-memory checkpoint IORef only after the DB write succeeds.
+  case mCheckpoint of
+    Just (cpSlot, cpHash) → do
+      case Api.deserialiseFromRawBytesHex (Api.AsHash (Api.proxyToAsType (Proxy @Api.BlockHeader))) (Text.encodeUtf8 cpHash) of
+        Right blockHash → writeIORef (ssCheckpointRef ss) (Api.ChainPoint (Api.SlotNo cpSlot) blockHash)
+        Left _ → pure () -- Should not happen since we serialised it ourselves.
+    Nothing → pure ()
   gyLogInfo (ctxProviders ctx) mempty $
     "Chain sync: state updated, " <> show (length modifiedLeaves) <> " leaf positions modified"
 

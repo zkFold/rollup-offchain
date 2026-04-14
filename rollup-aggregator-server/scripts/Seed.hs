@@ -13,7 +13,7 @@ import Options.Applicative
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (initialState)
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (initDb, saveState)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (initDb, saveResetToGenesisDb)
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api
 import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
@@ -136,7 +136,7 @@ runCommand RollupSeedCommand {..} = do
     let initialLeafHashes = pure ((hHash . hash) (nullUTxO @A @I))
     createDirectoryIfMissing True (takeDirectory rscStateFile)
     initDb rscStateFile
-    saveState rscStateFile state0 initialLeafHashes
+    saveResetToGenesisDb rscStateFile state0 initialLeafHashes
     Prelude.putStrLn $ "Initial state written to: " <> rscStateFile
 
 writeRollupConfig ∷ GYNetworkId → FilePath → ZKInitializedRollupBuildInfo → IO ()
