@@ -18,7 +18,7 @@ import Control.Concurrent.STM (
   readTVarIO,
   writeTVar,
  )
-import Control.Exception (AsyncException, Exception, Handler (Handler), SomeException, catches, displayException, fromException, throwIO)
+import Control.Exception (Exception, Handler (Handler), SomeAsyncException, SomeException, catches, displayException, fromException, throwIO)
 import Control.Monad (forM, forever, when, unless)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.Aeson (encode)
@@ -407,7 +407,7 @@ processBatchWithLogging ctx@Ctx {..} bs ids queued lastLenRef =
               -- Re-throws async exceptions (ThreadKilled, StackOverflow) so they still propagate.
               , Handler $ \(err ∷ SomeException) →
                   case fromException err of
-                    Just (_ ∷ AsyncException) → throwIO err
+                    Just (_ ∷ SomeAsyncException) → throwIO err
                     Nothing → revert >> logException "SomeException" err
               ]
  where
