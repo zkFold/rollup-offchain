@@ -75,6 +75,7 @@ batchConfig:
 apiKey: SERVER_API_KEY
 # File path where to persist rollup-state. When starting from initial state, this file can be empty.
 dbPath: rollup.db
+# Access to socket path of running cardano node for chain sync event listener to track the accumulating onchain L2 state.
 nodeSocketPath: path/to/node.socket
 maxBridgeIn: 1
 maxBridgeOut: 1
