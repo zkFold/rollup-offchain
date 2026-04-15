@@ -188,12 +188,13 @@ enqueueTx ∷ Ctx → QueuedTx → IO Text
 enqueueTx ctx queued = do
   let tx = qtTransaction queued
       providedUtxos = filter (/= nullUTxO) (qtInputUtxos queued)
+      outs = fromVector (unComp1 (outputs tx))
+      outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
+
   if null providedUtxos
     then do
       -- Backward-compatible path: resolve addresses from preimage DB.
-      let outs = fromVector (unComp1 (outputs tx))
-          outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
-          inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
+      let inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
           refTexts = map (decodeUtf8 . toStrict . encode) inRefs
       matchedUtxos ← lookupPreimagesByRefDb (ctxDbPath ctx) refTexts
       let inAddrs = map (decodeUtf8 . toStrict . encode . oAddress . uOutput) matchedUtxos
@@ -218,9 +219,7 @@ enqueueTx ctx queued = do
               "enqueueTx: "
                 <> show unknownCount
                 <> " provided UTxO(s) not found in preimage DB (may be from pending txs or external aggregator)"
-          let outs = fromVector (unComp1 (outputs tx))
-              outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
-              inAddrs = map (decodeUtf8 . toStrict . encode . oAddress . uOutput) providedUtxos
+          let inAddrs = map (decodeUtf8 . toStrict . encode . oAddress . uOutput) providedUtxos
           enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
 
 -- | Revalidate all pending transactions against the current state.
