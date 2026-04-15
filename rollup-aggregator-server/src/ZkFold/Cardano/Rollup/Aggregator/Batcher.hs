@@ -84,6 +84,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   revertProcessingTxsDb,
   revertTxsDb,
   saveBatchResultDb,
+  savePreimagesDb,
   seedPreimageDbFromOldState,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types
@@ -326,6 +327,11 @@ nullQueuedTx =
 -- * there are pending bridge-ins on L1 (remaining slots are padded with null txs).
 startBatcher ∷ Ctx → BatcherState → IO ()
 startBatcher ctx@Ctx {..} bs = do
+  -- Crash recovery: revert any txs that were left in 'processing' state from a
+  -- prior run. Without this they would be stuck until ChainSync detects a state
+  -- change, and in the worst case (L1 confirmed but DB not updated) they could
+  -- be silently orphaned.
+  revertProcessingTxsDb ctxDbPath
   -- Track ChainSync's chain length to detect external updates and for waitForChainSync.
   lastChainSyncLenRef ← readTVarIO (bsLedgerStateVar bs) >>= newTVarIO . feToInteger . sLength
   chainSyncWarnedRef ← newIORef False
@@ -492,12 +498,16 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
       rollupState = stateToRollupState newState
       delta = computeDelta witness batch bridgedIn newState
       collateral = Just (ctxCollateral, False)
-  -- Store new UTxO preimages in the DB (for ChainSync / next batch to look up).
+  -- Store new UTxO preimages in the DB BEFORE submitting the L1 transaction.
+  -- This ensures that if the process crashes after L1 confirm but before
+  -- saveBatchResultDb completes, the preimage DB is still consistent with
+  -- the on-chain state that ChainSync will observe on restart.
   let newEntries =
         [ (hHash (hash utxo), uRef utxo, utxo)
         | utxo ← fromVector newPreimage
         , utxo /= nullUTxO @A @I
         ]
+  savePreimagesDb ctxDbPath newEntries
   -- Submit the L1 transaction.
   submittedTxId ←
     runGYTxMonadIO

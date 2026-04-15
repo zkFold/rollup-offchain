@@ -20,6 +20,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   saveRollupUpdateDb,
   saveRollbackDb,
   saveResetToGenesisDb,
+  savePreimagesDb,
   saveBatchResultDb,
   lookupPreimagesDb,
   lookupPreimagesByRefDb,
@@ -505,9 +506,27 @@ saveResetToGenesisDb dbPath initState initLeafHashes =
 -- Preimage DB: hash → UTxO mapping
 -- ---------------------------------------------------------------------------
 
--- | Atomically store preimages + record batch + mark txs as batched.
--- Combines what was previously three separate operations ('savePreimagesDb',
--- 'recordBatchDb') into a single transaction for crash safety.
+-- | Persist UTxO preimages to the DB.
+-- Called BEFORE submitting the L1 transaction so that a crash between
+-- L1 confirm and 'saveBatchResultDb' does not leave the preimage DB
+-- missing entries that ChainSync will need.
+-- Uses INSERT OR IGNORE so calling this twice is safe.
+savePreimagesDb ∷ FilePath → [(FieldElement I, OutputRef I, UTxO A I)] → IO ()
+savePreimagesDb dbPath preimageEntries = withConn dbPath $ \conn →
+  withTransaction conn $
+    forM_ preimageEntries $ \(leafHash, ref, utxo) →
+      execute
+        conn
+        "INSERT OR IGNORE INTO utxo_preimages (leaf_hash, output_ref, utxo_data) VALUES (?, ?, ?)"
+        (toText leafHash, toText ref, toText utxo)
+ where
+  toText ∷ ToJSON a ⇒ a → Text
+  toText = decodeUtf8 . toStrict . encode
+
+-- | Atomically record batch + mark txs as batched.
+-- Preimages must already be written via 'savePreimagesDb' before calling this.
+-- The preimage inserts here are INSERT OR IGNORE (idempotent) for the rare
+-- case where 'savePreimagesDb' was not called separately.
 saveBatchResultDb ∷ FilePath → [(FieldElement I, OutputRef I, UTxO A I)] → [Int64] → Text → IO ()
 saveBatchResultDb dbPath preimageEntries txIds l1TxId = withConn dbPath $ \conn →
   withTransaction conn $ do
