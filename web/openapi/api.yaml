@@ -208,9 +208,9 @@ components:
       description: Current rollup state info
       properties:
         state:
-          $ref: '#/components/schemas/State_Natural_Natural_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          $ref: '#/components/schemas/State_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
       type: object
-    State_Natural_Natural_10_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
+    State_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513)):
       properties:
         sLength:
           type: integer
@@ -254,6 +254,10 @@ components:
             minItems: 2
             type: array
           type: array
+        input_utxos:
+          items:
+            $ref: '#/components/schemas/UTxO_2_(Interpreter_*_(Zp_52435875175126190479447740508185965837690552500527637822603658699938581184513))'
+          type: array
         signatures:
           items:
             items:
@@ -274,6 +278,7 @@ components:
       - transaction
       - signatures
       - bridge_outs
+      - input_utxos
       type: object
     SubmitTxResponse:
       description: Response to the L2 transaction submission
