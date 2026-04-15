@@ -23,17 +23,15 @@ import GeniusYield.Test.Privnet.Ctx (
   ctxRunBuilder,
   ctxRunQuery,
   ctxUserF,
-  ctxWaitNextBlock,
  )
 import GeniusYield.Test.Privnet.Setup (Setup, withSetup)
-import GeniusYield.TxBuilder (buildTxBody, mustMint, signAndSubmitConfirmed, userAddr, userPaymentSKey', utxosAtAddress)
+import GeniusYield.TxBuilder (buildTxBody, mustMint, signAndSubmitConfirmed, userAddr, userPaymentSKey', utxosAtAddress, submitTxConfirmed)
 import GeniusYield.Types (
   GYBuildPlutusScript (GYBuildPlutusScriptInlined),
   GYBuildScript (GYBuildPlutusScript),
   GYSomePaymentSigningKey (AGYPaymentSigningKey),
   PlutusVersion (PlutusV2),
   addressToBech32,
-  gySubmitTx,
   signGYTx,
   unitRedeemer,
   utxoRef,
@@ -136,7 +134,6 @@ endToEndTests setup =
             txBodyMint ← ctxRunBuilder privCtx fundUser $ buildTxBody mintSkel
             tidMint ← ctxRun privCtx fundUser $ signAndSubmitConfirmed txBodyMint
             info $ "Mint asset2: " <> show tidMint
-            ctxWaitNextBlock privCtx
 
             -- Step 3: Create aggregator Ctx
             let nid = ctxNetworkId privCtx
@@ -174,8 +171,7 @@ endToEndTests setup =
 
             -- Step 5: Sign and submit bridge-in tx
             let signedTx = signGYTx unsignedTx [userPaymentSKey' fundUser]
-            _bridgeInTxId ← gySubmitTx providers signedTx
-            ctxWaitNextBlock privCtx
+            _bridgeInTxId ← ctxRun privCtx fundUser $ submitTxConfirmed signedTx
             info "Bridge-in tx submitted and confirmed"
 
             -- Step 6: Submit L2 txs via handleSubmitTx
