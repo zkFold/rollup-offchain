@@ -42,6 +42,7 @@ import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Word (Word64)
 import Database.SQLite.Simple
+import Database.SQLite.Simple.ToField (toField)
 import Deriving.Aeson
 import GHC.Natural (Natural)
 import GeniusYield.Types (GYAddress, LowerFirst)
@@ -337,6 +338,11 @@ getPendingBridgeOutsDb dbPath targetAddr = withConn dbPath $ \conn → do
 -- Helpers
 -- ---------------------------------------------------------------------------
 
+-- | Split a list into chunks of at most n elements.
+chunksOf ∷ Int → [a] → [[a]]
+chunksOf _ [] = []
+chunksOf n xs = take n xs : chunksOf n (drop n xs)
+
 formatTimestamp ∷ UTCTime → Text
 formatTimestamp = Text.pack . iso8601Show
 
@@ -555,17 +561,21 @@ saveBatchResultDb dbPath preimageEntries txIds l1TxId = withConn dbPath $ \conn 
 
 -- | Look up UTxO preimages by their leaf hashes.
 -- Returns a map from hash text → UTxO for all hashes found in the DB.
+-- Issues a single IN query per chunk of 500 hashes instead of N individual queries.
 lookupPreimagesDb ∷ FilePath → [Text] → IO (Map.Map Text (UTxO A I))
+lookupPreimagesDb _ [] = return Map.empty
 lookupPreimagesDb dbPath hashTexts = withConn dbPath $ \conn → do
-  pairs ← forM hashTexts $ \ht → do
-    rows ∷ [Only Text] ←
-      query conn "SELECT utxo_data FROM utxo_preimages WHERE leaf_hash = ?" (Only ht)
-    case rows of
-      [Only utxoText] → case eitherDecodeStrict (encodeUtf8 utxoText) of
-        Right utxo → return (Just (ht, utxo))
-        Left _ → return Nothing
-      _ → return Nothing
-  return $ Map.fromList (catMaybes pairs)
+  rows ← fmap concat $ forM (chunksOf 500 hashTexts) $ \chunk → do
+    let n = length chunk
+        placeholders = Text.intercalate "," (replicate n "?")
+        q = Query $ "SELECT leaf_hash, utxo_data FROM utxo_preimages WHERE leaf_hash IN (" <> placeholders <> ")"
+    query conn q (map toField chunk) ∷ IO [(Text, Text)]
+  return $ Map.fromList $ mapMaybe
+    ( \(ht, utxoText) → case eitherDecodeStrict (encodeUtf8 utxoText) of
+        Right utxo → Just (ht, utxo)
+        Left _ → Nothing
+    )
+    rows
 
 -- | Look up UTxO preimages by their output refs.
 -- Used by 'enqueueTx' to resolve input addresses.

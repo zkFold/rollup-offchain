@@ -18,7 +18,7 @@ import Control.Concurrent.STM (
   readTVarIO,
   writeTVar,
  )
-import Control.Exception (Exception, Handler (Handler), catches, displayException, throwIO)
+import Control.Exception (AsyncException, Exception, Handler (Handler), SomeException, catches, displayException, fromException, throwIO)
 import Control.Monad (forM, forever, when, unless)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.Aeson (encode)
@@ -239,8 +239,11 @@ revalidatePendingTxs Ctx {..} BatcherState {..} = do
           , h /= nullHash
           ]
     preimageMap ← lookupPreimagesDb ctxDbPath nonNullHashTexts
-    let knownRefs = map uRef $ Map.elems preimageMap
-        isInputValid ref = ref == nullOutputRef || ref `elem` knownRefs
+    -- Build a map keyed by JSON-encoded ref text for O(log n) lookup.
+    -- OutputRef I has no Ord instance so we can't use Set directly.
+    let encodeRef = decodeUtf8 . toStrict . encode
+        knownRefTexts = Map.fromList [(encodeRef (uRef u), ()) | u ← Map.elems preimageMap]
+        isInputValid ref = ref == nullOutputRef || Map.member (encodeRef ref) knownRefTexts
         invalidIds =
           [ tid
           | (tid, qtx) ← pending
@@ -400,6 +403,12 @@ processBatchWithLogging ctx@Ctx {..} bs ids queued lastLenRef =
               , Handler (\(err ∷ MaestroProviderException) → revert >> logException "MaestroProviderException" err)
               , Handler (\(err ∷ KupoProviderException) → revert >> logException "KupoProviderException" err)
               , Handler (\(err ∷ OgmiosProviderException) → revert >> logException "OgmiosProviderException" err)
+              -- Catch-all: covers IOErrors from DB writes, ErrorCall from pure code, etc.
+              -- Re-throws async exceptions (ThreadKilled, StackOverflow) so they still propagate.
+              , Handler $ \(err ∷ SomeException) →
+                  case fromException err of
+                    Just (_ ∷ AsyncException) → throwIO err
+                    Nothing → revert >> logException "SomeException" err
               ]
  where
   revert = revertTxsDb ctxDbPath ids
