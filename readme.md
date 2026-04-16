@@ -33,7 +33,7 @@ logging:
     verbosity: V2
 port: 8082
 collateral:
-  d5b1818211e09c2276a5b3c07deabb462e2fcba2a2f3abf572cebff2c85d76c3#1
+  2d87ad1997d546591f57235b62801c8e8ee8f487ab96892c6fc929df30101995#0
   # Wallet that provides UTxO to be used as collateral.
 wallet:
   tag: mnemonicWallet
@@ -77,13 +77,16 @@ apiKey: SERVER_API_KEY
 dbPath: rollup.db
 # Access to socket path of running cardano node for chain sync event listener to track the accumulating onchain L2 state.
 nodeSocketPath: path/to/node.socket
+chainSyncStartPoint:
+  slot: 120542468
+  blockHash: 5c55360e637428f54e7fa891cd1fb29b094599090a0f7ffb09492cc033ab39b0
 maxBridgeIn: 1
 maxBridgeOut: 1
 maxOutputAssets: 2
-rollupAddr: addr_test1wpn5vup07v80j3ewh9hy939x4gg8ewnlwdmgaaxszwg744g3pnuup
-rollupNFT: 805d00f12460ac16e3760d386ed1e54bf2df5afdbba746921b4c8e2b.7a6b466f6c642d726f6c6c75702d6e6674
-rollupScriptRef: 58f40fe0e630f21ee3b2d68de9368a080f5ce5a2eacb61f728c1720d868e958a#0
-rollupStakeScriptRef: 58f40fe0e630f21ee3b2d68de9368a080f5ce5a2eacb61f728c1720d868e958a#1
+rollupAddr: addr_test1wzg2m2ju8eepm75fp73kc4lf2gme0l5ncz7fp0pwhg8058ccuyn43
+rollupNFT: b069e397fe35dce167c2a94192803bc1324e591e2fdc5756a24d4ae1.7a6b466f6c642d726f6c6c75702d6e6674
+rollupScriptRef: 818a6f3c0fdcbc5a8ec774c4f520dc55ec2dfd97063f3374c19bf776d59ea846#0
+rollupStakeScriptRef: 818a6f3c0fdcbc5a8ec774c4f520dc55ec2dfd97063f3374c19bf776d59ea846#1
 setupBytes:
   cmQc_bytes: 90e60fd0b07cd85dbabcea7946d8e0ce39539564c486a996014d3f0ed12249921afc41873881146b5117841c1d097168
   cmQk_bytes: 889cbdfb39698fe973050aaef12ff1234f46f8aa78bcc38a46f04281ab378cbd89bbf575a1cf89acbe7bc504e7341e7b
@@ -105,6 +108,7 @@ setupBytes:
   omegaNPrv_int: 42951892408294048319804799042074961265671975460177021439280319919049700054024
   omega_int: 42951892408294048319804799042074961265671975460177021439280319919049700054024
   pow: 18
+
 ```
 
 We provide a script to deploy rollup and this script would also generate relevant configuration parameters to be used in configuration file. Script can be executed like:
