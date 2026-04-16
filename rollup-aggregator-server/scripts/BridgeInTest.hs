@@ -15,7 +15,7 @@
 --     --config secrets/config-preprod.yaml \
 --     --amount 5000000 \
 --     [--poll-interval 60] \
---     [--timeout 600]
+--     [--timeout 1800]
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
@@ -75,7 +75,7 @@ parseOpts =
       auto
       ( long "timeout"
           <> metavar "SECONDS"
-          <> value 600
+          <> value 1800
           <> showDefault
           <> help "Give up after this many seconds"
       )

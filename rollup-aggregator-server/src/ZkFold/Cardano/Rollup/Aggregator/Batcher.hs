@@ -93,7 +93,7 @@ import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRol
 import ZkFold.Cardano.Rollup.Api.Utils (computeDelta, feToInteger, stateToRollupState)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
 import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
-import ZkFold.Cardano.UPLC.RollupSimple.Types (BridgeUtxoStatus (..))
+import ZkFold.Cardano.UPLC.RollupSimple.Types (BridgeUtxoStatus (..), RollupState (..))
 import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Data.Vector (Vector, fromVector)
 import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
@@ -278,6 +278,27 @@ queryBridgeIns ctx = runQuery ctx $ do
       pure $ catMaybes initials
     _ → pure []
 
+-- | Query the on-chain rollup state UTxO's UTxO tree root.
+-- Returns 'Nothing' if the state UTxO is not found or the datum cannot be decoded.
+-- Used to detect ChainSync staleness before generating a ZK proof: if the batcher's
+-- in-memory tree root (from 'bsLedgerStateVar') does not match the on-chain root,
+-- ChainSync has not yet replayed all historical blocks and batching must be skipped.
+queryOnChainUTxORoot ∷ Ctx → IO (Maybe Integer)
+queryOnChainUTxORoot ctx = runQuery ctx $ do
+  nft ← asks zkirbiNFT
+  rollupAddr ← rollupAddress
+  allUtxos ← utxosAtAddress rollupAddr Nothing
+  let stateUtxos =
+        filterUTxOs (\u → valueAssetClass (utxoValue u) (nonAdaTokenToAssetClass nft) == 1) allUtxos
+          & utxosToList
+  case stateUtxos of
+    [stateUtxo] → do
+      datumResult ← utxoDatum @_ @RollupState stateUtxo
+      case datumResult of
+        Right (_, _, rs) → pure (Just (utxoTreeRoot rs))
+        _ → pure Nothing
+    _ → pure Nothing
+
 -- | Convert a list of (L2 address, GYValue) pairs into the symbolic bridge-in representation.
 -- Takes up to 'Bi' items and pads the rest with 'nullOutput'.
 toBridgedIn ∷ [(Integer, GYValue)] → (Vector Bi :.: Output A) I
@@ -372,22 +393,40 @@ startBatcher ctx@Ctx {..} bs = do
       revertProcessingTxsDb ctxDbPath
       revalidatePendingTxs ctx bs
       atomically $ writeTVar lastChainSyncLenRef currentLen
-    -- Process batches.
-    bridgeInData ← queryBridgeIns ctx
-    if not (null bridgeInData)
-      then do
-        -- Bridge-ins pending: trigger a batch even with fewer than TxCount real txs,
-        -- padding the remainder with null transactions.
-        let txCount = fromIntegral (natVal (Proxy @TxCount))
-        available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
-        let (ids, qtxs) = unzip available
-            padded = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
-        processBatchWithLogging ctx bs ids padded lastChainSyncLenRef
+    -- Guard: verify ChainSync's in-memory state matches the on-chain rollup state
+    -- before generating any ZK proof. If chain sync is still replaying history (e.g.
+    -- fresh start from genesis with no persisted checkpoint), the UTxO tree roots will
+    -- diverge and any proof built from the stale local state will be rejected on-chain.
+    localRoot ← feToInteger . sUTxO <$> readTVarIO (bsLedgerStateVar bs)
+    mOnChainRoot ← queryOnChainUTxORoot ctx
+    let chainSyncCaughtUp = case mOnChainRoot of
+          Just onChainRoot → onChainRoot == localRoot
+          Nothing → True -- no state UTxO yet (rollup not deployed); safe to proceed
+    if not chainSyncCaughtUp
+      then
+        gyLogWarning ctxProviders mempty $
+          "ChainSync not yet caught up to on-chain state (local root "
+            <> show localRoot
+            <> " ≠ on-chain root "
+            <> show (maybe 0 id mOnChainRoot)
+            <> "), skipping batch cycle"
       else do
-        mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
-        for_ mQueued $ \pairs →
-          let (ids, qtxs) = unzip pairs
-           in processBatchWithLogging ctx bs ids qtxs lastChainSyncLenRef
+        -- Process batches.
+        bridgeInData ← queryBridgeIns ctx
+        if not (null bridgeInData)
+          then do
+            -- Bridge-ins pending: trigger a batch even with fewer than TxCount real txs,
+            -- padding the remainder with null transactions.
+            let txCount = fromIntegral (natVal (Proxy @TxCount))
+            available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
+            let (ids, qtxs) = unzip available
+                padded = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
+            processBatchWithLogging ctx bs ids padded lastChainSyncLenRef
+          else do
+            mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
+            for_ mQueued $ \pairs →
+              let (ids, qtxs) = unzip pairs
+               in processBatchWithLogging ctx bs ids qtxs lastChainSyncLenRef
 
 processBatchWithLogging ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → TVar Integer → IO ()
 processBatchWithLogging ctx@Ctx {..} bs ids queued lastLenRef =

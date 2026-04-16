@@ -332,12 +332,13 @@ handleRollback ctx bs ss point = do
   let targetSlot = case point of
         Api.ChainPointAtGenesis → 0
         Api.ChainPoint (Api.SlotNo s) _ → s
-  -- A rollback to genesis when we're already at genesis is a no-op.
-  -- This happens on every fresh connect: the Ouroboros protocol sends
-  -- MsgRollBackward to the intersection point (genesis) after FindIntersect.
+  -- Any rollback when no blocks have been applied yet is a no-op.
+  -- The Ouroboros protocol always sends MsgRollBackward to the intersection
+  -- point (genesis or configured start slot) immediately after FindIntersect,
+  -- before forwarding any blocks.
   currentState ← readTVarIO (bsLedgerStateVar bs)
   let currentLen = feToInteger (sLength currentState)
-  if targetSlot == 0 && currentLen == 0
+  if currentLen == 0
     then pure ()
     else do
       gyLogWarning (ctxProviders ctx) mempty $

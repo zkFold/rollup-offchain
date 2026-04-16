@@ -196,8 +196,10 @@ updateRollupState newState bridgeIns' bridgeOuts' proofBytes treeDelta = do
   let (initials, others) = partitionEithers eithers
 
       -- Match provided bridge-ins against on-chain BridgeInInitial UTxOs by L2 address and value.
+      -- Take at most one UTxO per provided entry to avoid consuming duplicates when multiple
+      -- UTxOs share the same (addr, value) pair.
       provided = map (\(val, fe) → (feToInteger fe, val)) bridgeIns'
-      matchedInitials = map fst $ filter (\(utxo, addr) → (addr, utxoValue utxo) `elem` provided) initials
+      matchedInitials = take (length bridgeIns') $ map fst $ filter (\(utxo, addr) → (addr, utxoValue utxo) `elem` provided) initials
 
       -- Only spend matched BridgeInInitial UTxOs + other (non-BridgeInInitial) UTxOs.
       utxosToSpend = matchedInitials <> others
