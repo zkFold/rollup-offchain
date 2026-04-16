@@ -1,7 +1,8 @@
 -- | Manual bridge-in integration test against a live network (preprod / mainnet).
 --
 -- This tool:
---   1. Derives the L2 destination address from the operator wallet's L1 address.
+--   1. Derives the L2 destination address from the operator wallet's L1 address,
+--      or from an explicitly supplied @--l1-address@ if provided.
 --   2. Submits a bridge-in L1 transaction locking the requested amount into the rollup.
 --   3. Polls the L2 UTxO endpoint every @--poll-interval@ seconds until the UTxO
 --      appears (meaning the batcher fired and ChainSync confirmed), or @--timeout@
@@ -14,11 +15,13 @@
 --   rollup-bridge-in-test \
 --     --config secrets/config-preprod.yaml \
 --     --amount 5000000 \
+--     [--l1-address addr_test1...] \
 --     [--poll-interval 60] \
 --     [--timeout 1800]
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
+import Data.String (fromString)
 import GeniusYield.TxBuilder (runGYTxMonadIO, signAndSubmitConfirmed)
 import GeniusYield.Types (GYAddressBech32, GYValue, addressToBech32, valueFromLovelace)
 import Options.Applicative
@@ -39,6 +42,9 @@ import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 data Opts = Opts
   { oConfig ∷ !(Maybe FilePath)
   , oAmountLovelace ∷ !Integer
+  , oL1Address ∷ !(Maybe GYAddressBech32)
+  -- ^ Override the L1 address used for L2 address derivation.
+  -- Defaults to the operator wallet's own address when absent.
   , oPollIntervalSeconds ∷ !Int
   , oTimeoutSeconds ∷ !Int
   }
@@ -62,6 +68,14 @@ parseOpts =
           <> value 5_000_000
           <> showDefault
           <> help "Amount of lovelace to bridge in"
+      )
+    <*> optional
+      ( option
+          (fromString <$> str)
+          ( long "l1-address"
+              <> metavar "BECH32"
+              <> help "L1 address to derive the L2 destination from (default: wallet address)"
+          )
       )
     <*> option
       auto
@@ -87,18 +101,20 @@ main = do
   opts ← execParser $ info (parseOpts <**> helper) (fullDesc <> header "Bridge-in integration test")
   withCtx (oConfig opts) $ \_serverConfig ctx → do
     let (sigKey, walletAddr) = ctxSigningKey ctx
-        l1Addr ∷ GYAddressBech32 = addressToBech32 walletAddr
+        walletL1Addr ∷ GYAddressBech32 = addressToBech32 walletAddr
+        l1Addr = maybe walletL1Addr id (oL1Address opts)
         amount ∷ GYValue = valueFromLovelace (oAmountLovelace opts)
 
-    -- 1. Derive L2 address from wallet's L1 address.
+    -- 1. Derive L2 address from the given (or wallet) L1 address.
     ConvertAddressResponse l2Addr ← handleConvertAddress ctx (ConvertAddressRequest l1Addr)
-    putStrLn $ "Wallet L1 address : " <> show l1Addr
+    putStrLn $ "Wallet L1 address : " <> show walletL1Addr
+    putStrLn $ "L2 source address : " <> show l1Addr
     putStrLn $ "L2 destination    : " <> show l2Addr
     putStrLn $ "Bridge-in amount  : " <> show amount
 
     -- 2. Build tx body, sign, and submit to L1.
     putStrLn "\nBuilding bridge-in transaction..."
-    txBody ← runSkeletonI ctx [walletAddr] walletAddr Nothing $
+    txBody ← runSkeletonI ctx [walletAddr] walletAddr (Just (ctxCollateral ctx)) $
       bridgeIn [(l2Addr, amount)]
     txId ←
       runGYTxMonadIO
