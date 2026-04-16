@@ -41,7 +41,7 @@ import GeniusYield.Types (
 import System.Directory (removePathForcibly)
 import Test.Tasty (TestTree, testGroup, withResource)
 import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCaseSteps)
-import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initBatcherState, processBatch)
+import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initBatcherState, nullQueuedTx, processBatch)
 import ZkFold.Cardano.Rollup.Aggregator.ChainSync (startChainSync)
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx qualified as AggCtx
@@ -84,28 +84,125 @@ import ZkFold.Symbolic.Ledger.Examples.Three qualified as Ex3
 import ZkFold.Symbolic.Ledger.Types (Output (..), OutputRef (..), State (..), Transaction (..), UTxO (..), txId)
 -- import ZkFold.Protocol.NonInteractiveProof.TrustedSetup (powersOfTauSubset)
 
+-- | Acquire shared resources for an end-to-end test, given a DB path suffix.
+acquireResources ∷ Aeson.FromJSON a ⇒ String → IO (FilePath, BatcherState, a)
+acquireResources suffix = do
+  let dbPath = "/tmp/rollup-aggregator-test-" <> suffix <> ".db"
+  removePathForcibly dbPath
+  initDb dbPath
+  batcherState ← initBatcherState dbPath
+  -- ts <- powersOfTauSubset
+  setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
+  let
+      -- circuit = ledgerCircuit @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I
+      setupBytes =
+        -- ledgerSetup @G @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I ts circuit
+        --   & mkSetup
+        fromMaybe (error "Unable to decode setup-bytes") (Aeson.decode setupBytesJson)
+  pure (dbPath, batcherState, setupBytes)
+
 endToEndTests ∷ Setup → TestTree
 endToEndTests setup =
+  testGroup
+    "End-to-end tests"
+    [ bridgeInOnlyTests setup
+    , fullFlowTests setup
+    ]
+
+-- | Test that a bridge-in submitted on L1 with no pending L2 transactions is
+-- reflected in the L2 UTxO set after the batcher fires a null-padded batch.
+bridgeInOnlyTests ∷ Setup → TestTree
+bridgeInOnlyTests setup =
   withResource
-    ( do
-        let dbPath = "/tmp/rollup-aggregator-test.db"
-        removePathForcibly dbPath
-        initDb dbPath
-        batcherState ← initBatcherState dbPath
-        -- ts <- powersOfTauSubset
-        setupBytesJson ← BSL.readFile "rollup-aggregator-server/test/data/setup-bytes.json"
-        let
-          -- circuit = ledgerCircuit @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I
-          setupBytes =
-            -- ledgerSetup @G @ByteString @Ex3.Bi @Ex3.Bo @Ex3.Ud @Ex3.A @Ex3.S @Ex3.N @Ex3.TxCount @Ex3.I ts circuit
-            --   & mkSetup
-            fromMaybe (error "Unable to decode setup-bytes") (Aeson.decode setupBytesJson)
-        pure (dbPath, batcherState, setupBytes)
-    )
+    (acquireResources "bi-only")
+    (\_ → pure ())
+    $ \getResources →
+      testCaseSteps "Bridge-in-only batch (null-tx padding)" $ \info → withSetup info setup $ \privCtx → do
+        (dbPath, batcherState, setupBytes) ← getResources
+        let fundUser = ctxUserF privCtx
+            rollupState0 = stateToRollupState Ex3.prevState
+
+        -- Seed rollup + register stake
+        (buildInfo, txBodySeed) ←
+          ctxRunBuilder privCtx fundUser $
+            seedRollup setupBytes 1 1 2 Nothing rollupState0
+        tidSeed ← ctxRun privCtx fundUser $ signAndSubmitConfirmed txBodySeed
+        info $ "Seed rollup: " <> show tidSeed
+
+        txBodyRegStake ←
+          ctxRunBuilder privCtx fundUser $
+            runReaderT (registerRollupStake >>= buildTxBody) buildInfo
+        _tidRegStake ← ctxRun privCtx fundUser $ signAndSubmitConfirmed txBodyRegStake
+        info "Register stake"
+
+        -- Mint asset2 (FakeCoin "zk-rollup")
+        let asset2 = FakeCoin "zk-rollup"
+            mintPolicy = fakePolicy asset2
+            mintSkel = mustMint @'PlutusV2 (GYBuildPlutusScript (GYBuildPlutusScriptInlined mintPolicy)) unitRedeemer "zk-rollup" 50_000_000
+        txBodyMint ← ctxRunBuilder privCtx fundUser $ buildTxBody mintSkel
+        _tidMint ← ctxRun privCtx fundUser $ signAndSubmitConfirmed txBodyMint
+        info "Mint asset2"
+
+        -- Create aggregator Ctx
+        let nid = ctxNetworkId privCtx
+            providers = ctxProviders privCtx
+            Api.LocalNodeConnectInfo {Api.localNodeSocketPath = Api.File nodeSocket} = ctxInfo privCtx
+        userUtxos ← ctxRunQuery privCtx $ utxosAtAddress (userAddr fundUser) Nothing
+        let collateralRef = utxoRef $ head $ utxosToList userUtxos
+            aggCtx =
+              AggCtx.Ctx
+                { AggCtx.ctxNetworkId = nid
+                , AggCtx.ctxProviders = providers
+                , AggCtx.ctxSigningKey = (AGYPaymentSigningKey (userPaymentSKey' fundUser), userAddr fundUser)
+                , AggCtx.ctxCollateral = collateralRef
+                , AggCtx.ctxRollupBuildInfo = buildInfo
+                , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
+                , AggCtx.ctxDbPath = dbPath
+                , AggCtx.ctxNodeSocketPath = nodeSocket
+                }
+
+        -- Start ChainSync
+        _chainSyncAsync ← startChainSync aggCtx batcherState nodeSocket
+
+        -- Submit bridge-in: 10 ADA + 50 asset2 to Ex3.address, no pending L2 txs
+        let bridgeInValue = valueFromLovelace 10_000_000 <> fakeValue asset2 50_000_000
+            birReq =
+              BridgeInRequest
+                { birAmount = bridgeInValue
+                , birDestinationAddress = Ex3.address
+                , birUsedAddresses = [addressToBech32 (userAddr fundUser)]
+                , birChangeAddress = addressToBech32 (userAddr fundUser)
+                }
+        BridgeInResponse unsignedTx ← handleBridgeIn aggCtx birReq
+        let signedTx = signGYTx unsignedTx [userPaymentSKey' fundUser]
+        _bridgeInTxId ← ctxRun privCtx fundUser $ submitTxConfirmed signedTx
+        info "Bridge-in submitted (no L2 txs queued)"
+
+        -- Fire a batch with only null transactions — exactly what startBatcher does
+        -- when bridge-ins are pending but no L2 txs are queued.
+        let txCount = fromIntegral (natVal (Proxy @Ex3.TxCount))
+            nullPaddedTxs = replicate txCount nullQueuedTx
+        tid ← processBatch aggCtx batcherState [] nullPaddedTxs
+        info $ "Bridge-in-only batch submitted: " <> show tid
+
+        -- Wait for ChainSync to confirm the state update
+        waitForChainSync' batcherState 1
+        info "ChainSync confirmed bridge-in batch"
+
+        -- Assert: the bridge-in UTxO is now visible in L2 at Ex3.address
+        QueryL2UtxosResponse biUtxos ← handleQueryL2Utxos aggCtx Ex3.address
+        assertEqual "exactly one UTxO at Ex3.address after bridge-in batch" 1 (length biUtxos)
+        info "Bridge-in correctly reflected in L2 UTxO set"
+
+-- | Full end-to-end test: bridge-in + L2 txs across two batches.
+fullFlowTests ∷ Setup → TestTree
+fullFlowTests setup =
+  withResource
+    (acquireResources "full")
     (\_ → pure ())
     $ \getResources →
       testGroup
-        "End-to-end tests"
+        "Full flow"
         [ testCaseSteps "Bridge-in + L2 txs + batch processing" $ \info → withSetup info setup $ \privCtx → do
             (dbPath, batcherState, setupBytes) ← getResources
             -- BSL.writeFile "rollup-aggregator-server/test/data/setup-bytes.json" (Aeson.encode setupBytes)

@@ -6,6 +6,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Batcher (
   processBatch,
   initialState,
   queryBridgeIns,
+  nullQueuedTx,
 ) where
 
 import Control.Concurrent (threadDelay)
