@@ -112,7 +112,12 @@ main = do
     putStrLn $ "L2 destination    : " <> show l2Addr
     putStrLn $ "Bridge-in amount  : " <> show amount
 
-    -- 2. Build tx body, sign, and submit to L1.
+    -- 2. Snapshot current L2 UTxO count before submitting so we can detect the increase.
+    QueryL2UtxosResponse utxosBefore ← handleQueryL2Utxos ctx l2Addr
+    let countBefore = length utxosBefore
+    putStrLn $ "L2 UTxOs before bridge-in: " <> show countBefore
+
+    -- 3. Build tx body, sign, and submit to L1.
     putStrLn "\nBuilding bridge-in transaction..."
     txBody ← runSkeletonI ctx [walletAddr] walletAddr (Just (ctxCollateral ctx)) $
       bridgeIn [(l2Addr, amount)]
@@ -128,7 +133,7 @@ main = do
         $ signAndSubmitConfirmed txBody
     putStrLn $ "Bridge-in submitted: " <> show txId
 
-    -- 3. Poll until the batcher processes the bridge-in and ChainSync confirms.
+    -- 4. Poll until the L2 UTxO count increases by at least 1.
     let intervalSecs = oPollIntervalSeconds opts
         maxTicks = max 1 (oTimeoutSeconds opts `div` intervalSecs)
     putStrLn $
@@ -137,27 +142,29 @@ main = do
         <> "s, timeout "
         <> show (maxTicks * intervalSecs)
         <> "s)..."
-    pollForUtxo ctx l2Addr intervalSecs maxTicks
+    pollForUtxo ctx l2Addr countBefore intervalSecs maxTicks
 
--- | Poll @handleQueryL2Utxos@ until a UTxO appears at @l2Addr@ or @maxTicks@ is reached.
-pollForUtxo ∷ Ctx → FieldElement I → Int → Int → IO ()
-pollForUtxo ctx l2Addr intervalSecs maxTicks = go 0
+-- | Poll @handleQueryL2Utxos@ until the UTxO count at @l2Addr@ exceeds @countBefore@,
+-- or @maxTicks@ is reached.
+pollForUtxo ∷ Ctx → FieldElement I → Int → Int → Int → IO ()
+pollForUtxo ctx l2Addr countBefore intervalSecs maxTicks = go 0
  where
   go tick = do
     QueryL2UtxosResponse utxos ← handleQueryL2Utxos ctx l2Addr
     let elapsed = tick * intervalSecs
-    if not (null utxos)
+        countNow = length utxos
+    if countNow > countBefore
       then do
         putStrLn $ "\nSuccess! Bridge-in reflected in L2 after ~" <> show elapsed <> "s."
-        putStrLn $ "UTxOs at L2 address: " <> show (length utxos)
+        putStrLn $ "UTxOs at L2 address: " <> show countBefore <> " → " <> show countNow
       else if tick >= maxTicks
         then do
-          putStrLn $ "\nTimed out after " <> show elapsed <> "s — UTxO not yet visible."
+          putStrLn $ "\nTimed out after " <> show elapsed <> "s — UTxO count did not increase."
           putStrLn "Diagnostics:"
           putStrLn "  * Is the batcher running? (rollup-aggregator-server batch --config ...)"
           putStrLn "  * Is ChainSync synced? Check logs for 'ChainSync appears stuck'"
           putStrLn $ "  * sqlite3 <dbPath> \"SELECT * FROM ledger_state; SELECT * FROM batches ORDER BY id DESC LIMIT 3\""
         else do
-          putStrLn $ "  [" <> show elapsed <> "s] not yet visible, retrying in " <> show intervalSecs <> "s..."
+          putStrLn $ "  [" <> show elapsed <> "s] count still " <> show countNow <> ", retrying in " <> show intervalSecs <> "s..."
           threadDelay (intervalSecs * 1_000_000)
           go (tick + 1)
