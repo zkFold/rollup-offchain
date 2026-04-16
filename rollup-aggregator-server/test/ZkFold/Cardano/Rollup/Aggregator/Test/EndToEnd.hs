@@ -162,7 +162,7 @@ bridgeInOnlyTests setup =
                 }
 
         -- Start ChainSync
-        _chainSyncAsync ← startChainSync aggCtx batcherState nodeSocket
+        _chainSyncAsync ← startChainSync aggCtx batcherState nodeSocket Nothing
 
         -- Submit bridge-in: 10 ADA + 50 asset2 to Ex3.address, no pending L2 txs
         let bridgeInValue = valueFromLovelace 10_000_000 <> fakeValue asset2 50_000_000
@@ -252,7 +252,7 @@ fullFlowTests setup =
                     }
 
             -- Start ChainSync so the Merkle tree and state are maintained.
-            _chainSyncAsync ← startChainSync aggCtx batcherState nodeSocket
+            _chainSyncAsync ← startChainSync aggCtx batcherState nodeSocket Nothing
 
             -- Step 4: Bridge-in via handleBridgeIn (10 ADA + 50 asset2)
             let bridgeInValue = valueFromLovelace 10_000_000 <> fakeValue asset2 50_000_000

@@ -1,6 +1,7 @@
 module ZkFold.Cardano.Rollup.Aggregator.Run (
   runServer,
   runBatcher,
+  withCtx,
 ) where
 
 import Control.Exception (Exception (..), SomeException (..), throwIO, try)
@@ -172,5 +173,5 @@ runBatcher mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
   -- Start chain sync in background.
   let socketPath = ctxNodeSocketPath ctx
   logInfoS $ "Starting chain sync client (socket: " <> socketPath <> ")"
-  _chainSyncAsync ← startChainSync ctx batcherState socketPath
+  _chainSyncAsync ← startChainSync ctx batcherState socketPath (scChainSyncStartPoint serverConfig)
   startBatcher ctx batcherState

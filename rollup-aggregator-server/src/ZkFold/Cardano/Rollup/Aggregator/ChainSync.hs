@@ -46,6 +46,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
 import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import Data.Text.Encoding qualified as Text
+import ZkFold.Cardano.Rollup.Aggregator.Config (ChainSyncStartPoint (..))
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (loadCheckpoint, saveResetToGenesisDb, saveRollbackDb, saveRollupUpdateDb)
 import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
@@ -92,8 +93,11 @@ startChainSync
   → BatcherState
   → FilePath
   -- ^ Cardano node socket path.
+  → Maybe ChainSyncStartPoint
+  -- ^ Optional starting point used only on first run (no persisted checkpoint).
+  -- Lets the operator skip syncing from genesis when the rollup was deployed recently.
   → IO (Async.Async ())
-startChainSync ctx bs socketPath = do
+startChainSync ctx bs socketPath mStartPoint = do
   let connInfo = networkIdToLocalNodeConnectInfo (ctxNetworkId ctx) socketPath
   rs ← RetryState <$> newIORef initialBackoffMicros <*> newIORef 0
   -- Load persisted checkpoint for resuming chain sync after restart.
@@ -109,9 +113,23 @@ startChainSync ctx bs socketPath = do
           gyLogWarning (ctxProviders ctx) mempty $
             "Chain sync: failed to decode persisted checkpoint: " <> show err <> ", starting from genesis"
           pure Api.ChainPointAtGenesis
-    Nothing → do
-      gyLogInfo (ctxProviders ctx) mempty "Chain sync: no checkpoint found, starting from genesis"
-      pure Api.ChainPointAtGenesis
+    Nothing →
+      -- No checkpoint yet — first run. Try to use the configured start point so
+      -- we skip syncing all blocks prior to rollup deployment.
+      case mStartPoint of
+        Nothing → do
+          gyLogInfo (ctxProviders ctx) mempty "Chain sync: no checkpoint found, starting from genesis"
+          pure Api.ChainPointAtGenesis
+        Just ChainSyncStartPoint {..} →
+          case Api.deserialiseFromRawBytesHex (Api.AsHash (Api.proxyToAsType (Proxy @Api.BlockHeader))) (Text.encodeUtf8 csspBlockHash) of
+            Right blockHash → do
+              gyLogInfo (ctxProviders ctx) mempty $
+                "Chain sync: no checkpoint found, starting from configured start point at slot " <> show csspSlot
+              pure $ Api.ChainPoint (Api.SlotNo csspSlot) blockHash
+            Left err → do
+              gyLogWarning (ctxProviders ctx) mempty $
+                "Chain sync: failed to decode configured start point block hash: " <> show err <> ", starting from genesis"
+              pure Api.ChainPointAtGenesis
   checkpointRef ← newIORef resumePoint
   recentBlocksRef ← newIORef []
   let ss = SyncState checkpointRef recentBlocksRef

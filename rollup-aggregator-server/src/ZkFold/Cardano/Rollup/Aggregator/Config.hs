@@ -2,6 +2,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Config (
   -- * Configuration Types
   ServerConfig (..),
   BatchConfig (..),
+  ChainSyncStartPoint (..),
 
   -- * Configuration Loading
   serverConfigOptionalFPIO,
@@ -17,7 +18,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.String (IsString (..))
 import Data.Text (Text)
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Data.Yaml qualified as Yaml
 import Deriving.Aeson
 import GeniusYield.GYConfig (Confidential, GYCoreConfig (..), GYCoreProviderInfo)
@@ -43,6 +44,24 @@ data MnemonicWalletDetails = MnemonicWalletDetails
   }
   deriving stock Generic
   deriving anyclass (FromJSON, ToJSON)
+
+-- | Optional starting chain point for chain sync.
+-- Used only on first run (when no checkpoint is persisted). Set this to a block
+-- just before rollup deployment to avoid syncing from genesis.
+-- Both the slot number and the block header hash (hex) are required because the
+-- Cardano Ouroboros protocol's FindIntersect message needs both.
+-- You can obtain the block hash for a given slot from a block explorer or
+-- from cardano-cli (e.g. @cardano-cli query tip@).
+data ChainSyncStartPoint = ChainSyncStartPoint
+  { csspSlot ∷ !Word64
+  -- ^ Slot number of the starting block.
+  , csspBlockHash ∷ !Text
+  -- ^ Block header hash in hex encoding.
+  }
+  deriving stock Generic
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[FieldLabelModifier '[StripPrefix "cssp", LowerFirst]] ChainSyncStartPoint
 
 -- | Batch processing configuration.
 data BatchConfig = BatchConfig
@@ -94,6 +113,11 @@ data ServerConfig = ServerConfig
   -- ^ SQLite database file path for the transaction queue and ledger state.
   , scNodeSocketPath ∷ !FilePath
   -- ^ Path to the cardano-node socket. Used for chain sync.
+  , scChainSyncStartPoint ∷ !(Maybe ChainSyncStartPoint)
+  -- ^ Optional starting chain point for first-run chain sync.
+  -- When absent, syncing begins from genesis. When present, this slot/hash
+  -- is used as the intersection point on first run (no persisted checkpoint).
+  -- Has no effect once a checkpoint has been saved.
   }
   deriving stock Generic
   deriving
