@@ -347,23 +347,23 @@ handleRollback ctx bs ss point = do
       recent ← readIORef (ssRecentBlocksRef ss)
       writeIORef (ssRecentBlocksRef ss) (filter (\(s, _) → s <= targetSlot) recent)
       history ← readTVarIO (bsStateHistoryVar bs)
-      -- Find the most recent snapshot at or before the target slot.
-      case dropWhile (\(s, _, _) → s > targetSlot) history of
-        ((_, st, lh) : rest) → do
+      -- Split history into entries newer than targetSlot (to discard) and
+      -- entries at or before targetSlot (to keep).
+      let (toDrop, toKeep) = span (\(s, _, _) → s > targetSlot) history
+      case toDrop of
+        [] → pure () -- No history entries newer than targetSlot; already at or before target.
+        _ → do
+          -- The last entry in toDrop is the oldest update being discarded.
+          -- Its stored state is the state BEFORE that update was applied —
+          -- exactly the state we want after rolling back past it.
+          let (_, st, lh) = last toDrop
           atomically $ do
             writeTVar (bsLedgerStateVar bs) st
             writeTVar (bsLeafHashesVar bs) lh
             writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves lh)
-            writeTVar (bsStateHistoryVar bs) rest
+            writeTVar (bsStateHistoryVar bs) toKeep
           -- Atomically prune history and persist the restored state.
           saveRollbackDb (ctxDbPath ctx) targetSlot st lh
-        [] → do
-          -- No snapshot covers this slot; reset to genesis and restart chain sync
-          -- so it replays all blocks from the beginning.
-          gyLogWarning (ctxProviders ctx) mempty $
-            "Chain sync: rollback beyond history depth, resetting to genesis and resyncing"
-          resetToGenesis ctx bs ss
-          throwIO $ userError "Chain sync: rollback beyond history, resyncing from genesis"
 
 -- | Scan a single transaction for a rollup state update.
 -- Returns 'Just' if the transaction produces an output with the rollup NFT.
