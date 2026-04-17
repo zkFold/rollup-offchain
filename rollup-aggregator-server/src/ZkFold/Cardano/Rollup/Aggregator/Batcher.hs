@@ -62,7 +62,7 @@ import GeniusYield.Types (
   utxosRemoveTxOutRef,
   utxosToList,
   valueAssetClass,
-  valueToPlutus,
+  valueToPlutus, GYAssetClass (..),
  )
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenValue)
 import System.Timeout (timeout)
@@ -273,7 +273,7 @@ queryBridgeIns ctx = runQuery ctx $ do
       initials ← forM others $ \u → do
         datumTuple ← utxoDatum @_ @BridgeUtxoStatus u
         case datumTuple of
-          Right (_, _, BridgeInInitial addr) → pure $ Just (addr, utxoValue u)
+          Right (_, val, BridgeInInitial addr) → if valueAssetClass val GYLovelace >= 5000000 then  pure $ Just (addr, utxoValue u) else pure Nothing
           _ → pure Nothing
       pure $ catMaybes initials
     _ → pure []

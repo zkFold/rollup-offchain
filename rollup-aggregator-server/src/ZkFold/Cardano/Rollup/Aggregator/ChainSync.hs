@@ -41,6 +41,7 @@ import GeniusYield.Types (
  )
 import PlutusTx qualified
 import ZkFold.Algebra.Class (FromConstant (..))
+import ZkFold.Algebra.Number (value)
 import ZkFold.Cardano.Rollup.Aggregator.Batcher (BatcherState (..), initialState)
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..))
 import Data.Proxy (Proxy (..))
@@ -48,7 +49,7 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as Text
 import ZkFold.Cardano.Rollup.Aggregator.Config (ChainSyncStartPoint (..))
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (loadCheckpoint, saveResetToGenesisDb, saveRollbackDb, saveRollupUpdateDb)
-import ZkFold.Cardano.Rollup.Aggregator.Types (A, I, Ud)
+import ZkFold.Cardano.Rollup.Aggregator.Types (A, Bi, I, N, TxCount, Ud)
 import ZkFold.Cardano.Rollup.Api.Utils (feToInteger)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
 import ZkFold.Cardano.UPLC.RollupSimple.Types (RollupSimpleRed (..), RollupState (..))
@@ -262,7 +263,7 @@ handleRollForward ctx bs ss (Api.BlockInMode Api.ConwayEra block) = do
         isAlreadySeen = onChainLen <= localChainLen && onChainRoot == localRoot
         isGap = onChainLen > localChainLen + 1
     if
-      | isNext || isFork → do
+      | isNext → do
           gyLogInfo (ctxProviders ctx) mempty $
             "Chain sync: applying state update (chain len " <> show localChainLen
               <> " → " <> show onChainLen <> ", slot " <> show slot <> ")"
@@ -271,26 +272,34 @@ handleRollForward ctx bs ss (Api.BlockInMode Api.ConwayEra block) = do
           mCheckpoint ← updateCheckpoint ss slot blockHash
           applyRollupUpdate ctx bs ss slot rsuNewRollupState rsuDelta mCheckpoint
       | isAlreadySeen → pure () -- Replay after restart, already processed.
+      | isFork → do
+          -- Same chain length but different root: our local state diverged.
+          -- Applying the on-chain delta against our leaf hashes would be wrong
+          -- (the delta was computed against the canonical chain's previous state,
+          -- not ours). Reset to the last checkpoint and resync from there.
+          gyLogWarning (ctxProviders ctx) mempty $
+            "Chain sync: fork detected (local len " <> show localChainLen
+              <> " root " <> show localRoot <> ", on-chain root " <> show onChainRoot
+              <> "). Resetting to checkpoint and resyncing."
+          resetToCheckpoint ctx bs ss
+          throwIO $ userError "Chain sync: fork detected, resyncing from checkpoint"
       | isGap → do
-          -- State discontinuity: we missed update(s). This means our persisted
-          -- state is inconsistent with the chain. Reset to genesis and restart
-          -- chain sync so it replays all blocks in order.
+          -- State discontinuity: we missed one or more updates.
           gyLogWarning (ctxProviders ctx) mempty $
             "Chain sync: state discontinuity detected (local len "
               <> show localChainLen <> ", on-chain len " <> show onChainLen
-              <> "). Resetting to genesis and resyncing."
-          resetToGenesis ctx bs ss
-          throwIO $ userError "Chain sync: state discontinuity, resyncing from genesis"
+              <> "). Resetting to checkpoint and resyncing."
+          resetToCheckpoint ctx bs ss
+          throwIO $ userError "Chain sync: state discontinuity, resyncing from checkpoint"
       | otherwise → do
-          -- Unexpected: onChainLen < localChainLen but roots differ.
-          -- Could be a deep fork. Reset to be safe.
+          -- onChainLen < localChainLen with different roots: deep fork.
           gyLogWarning (ctxProviders ctx) mempty $
             "Chain sync: unexpected state mismatch (local len "
               <> show localChainLen <> " root " <> show localRoot
               <> ", on-chain len " <> show onChainLen <> " root " <> show onChainRoot
-              <> "). Resetting to genesis and resyncing."
-          resetToGenesis ctx bs ss
-          throwIO $ userError "Chain sync: unexpected state mismatch, resyncing from genesis"
+              <> "). Resetting to checkpoint and resyncing."
+          resetToCheckpoint ctx bs ss
+          throwIO $ userError "Chain sync: unexpected state mismatch, resyncing from checkpoint"
 handleRollForward _ _ _ _ = pure () -- Ignore non-Conway blocks.
 
 -- | Push a new (slot, blockHash) onto the recent-blocks buffer. When the buffer
@@ -325,6 +334,35 @@ resetToGenesis ctx bs ss = do
   writeIORef (ssCheckpointRef ss) Api.ChainPointAtGenesis
   -- Atomically clear history + checkpoint + save initial state.
   saveResetToGenesisDb (ctxDbPath ctx) initialState initLH
+
+-- | Reset state to the last persisted checkpoint, then let the caller throw so
+-- the sync loop reconnects and replays only from the checkpoint forward.
+-- Much faster than a full genesis resync when the checkpoint is recent.
+--
+-- If no checkpoint has been saved yet (ssCheckpointRef = ChainPointAtGenesis),
+-- this behaves identically to 'resetToGenesis'.
+resetToCheckpoint ∷ Ctx → BatcherState → SyncState → IO ()
+resetToCheckpoint ctx bs ss = do
+  checkpoint ← readIORef (ssCheckpointRef ss)
+  let checkpointSlot = case checkpoint of
+        Api.ChainPointAtGenesis → 0
+        Api.ChainPoint (Api.SlotNo s) _ → s
+  history ← readTVarIO (bsStateHistoryVar bs)
+  recent ← readIORef (ssRecentBlocksRef ss)
+  -- Same logic as handleRollback: toDrop = updates after checkpoint,
+  -- toKeep = updates at/before checkpoint, last toDrop = state to restore.
+  let (toDrop, toKeep) = span (\(s, _, _) → s > checkpointSlot) history
+  case toDrop of
+    [] → pure () -- State is already at or before the checkpoint; no change needed.
+    _ → do
+      let (_, st, lh) = last toDrop
+      atomically $ do
+        writeTVar (bsLedgerStateVar bs) st
+        writeTVar (bsLeafHashesVar bs) lh
+        writeTVar (bsMerkleTreeVar bs) (SymMerkle.fromLeaves lh)
+        writeTVar (bsStateHistoryVar bs) toKeep
+      writeIORef (ssRecentBlocksRef ss) (filter (\(s, _) → s <= checkpointSlot) recent)
+      saveRollbackDb (ctxDbPath ctx) checkpointSlot st lh
 
 -- | Handle a chain rollback by restoring from the state history.
 handleRollback ∷ Ctx → BatcherState → SyncState → Api.ChainPoint → IO ()
@@ -429,9 +467,9 @@ applyRollupUpdate
   -- ^ Optional checkpoint to persist atomically with the state update.
   → IO ()
 applyRollupUpdate ctx bs ss slot newRollupState delta mCheckpoint = do
-  let biCount = 1 ∷ Int -- Bi
-      txCount = 2 ∷ Int -- TxCount
-      nCount = 2 ∷ Int -- N
+  let biCount = fromIntegral (value @Bi) ∷ Int
+      txCount = fromIntegral (value @TxCount) ∷ Int
+      nCount  = fromIntegral (value @N) ∷ Int
 
       -- Construct new State from on-chain RollupState.
       newState ∷ State I =
