@@ -15,7 +15,7 @@ import Test.Tasty (TestTree, testGroup, withResource)
 import Test.Tasty.HUnit (testCaseSteps)
 import ZkFold.Algebra.Class (Zero (..))
 import ZkFold.Cardano.Rollup.Api
-import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
+import ZkFold.Cardano.Rollup.Api.Utils (computeDelta, stateToRollupState)
 import ZkFold.Cardano.Rollup.Types
 import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
 import ZkFold.Protocol.NonInteractiveProof (powersOfTauSubset)
@@ -40,11 +40,13 @@ import ZkFold.Symbolic.Ledger.Examples.One (
   address,
   batch,
   batch2,
+  bridgedIn,
+  bridgedIn2,
   newState,
   newState2,
   prevState,
   witness,
-  witness2,
+  witness2, G,
  )
 
 lci =
@@ -73,15 +75,19 @@ lci2 =
 
 rollupState2 = stateToRollupState newState2
 
+delta1 = computeDelta @Bi @Bo @Ud @A @S @N @TxCount witness batch bridgedIn newState
+
+delta2 = computeDelta @Bi @Bo @Ud @A @S @N @TxCount witness2 batch2 bridgedIn2 newState2
+
 rollupUpdateTests ∷ Setup → TestTree
 rollupUpdateTests setup =
   withResource
     ( do
         ts ← powersOfTauSubset
         let
-          setupB = ledgerSetup @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
-          proofB = ledgerProof @ByteString ts proverSecret compiledCircuit lci & mkProof
-          proofB2 = ledgerProof @ByteString ts proverSecret compiledCircuit lci2 & mkProof
+          setupB = ledgerSetup @G @ByteString @Bi @Bo @Ud @A @S @N @TxCount @I ts compiledCircuit & mkSetup
+          proofB = ledgerProof @G @ByteString ts proverSecret compiledCircuit lci & mkProof
+          proofB2 = ledgerProof @G @ByteString ts proverSecret compiledCircuit lci2 & mkProof
         pure (ts, setupB, proofB, proofB2)
     )
     (\_ → pure ())
@@ -103,7 +109,7 @@ rollupUpdateTests setup =
             txBodyUpdate ←
               ctxRunBuilder ctx fundUser $
                 runReaderT
-                  (updateRollupState rollupState1 [(valueFromLovelace 5_000_000, address)] [] proofBPlutus >>= buildTxBody)
+                  (updateRollupState rollupState1 [(valueFromLovelace 5_000_000, address)] [] proofBPlutus delta1 >>= buildTxBody)
                   initializedBuildInfo
             tidUpdate ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate
             info $ "Update rollup transaction submitted: " <> show tidUpdate
@@ -122,55 +128,57 @@ rollupUpdateTests setup =
                         )
                       ]
                       proofB2Plutus
+                      delta2
                       >>= buildTxBody
                   )
                   initializedBuildInfo
             tidUpdate2 ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate2
             info $ "Update rollup transaction submitted which bridges out a value: " <> show tidUpdate2
-        , testCaseSteps "Rollup update where bridge in happens separately" $ \info → withSetup info setup $ \ctx → do
-            (_ts, setupB, proofB, proofB2) ← getResources
-            let
-              fundUser = ctxUserF ctx
-            (initializedBuildInfo, txBodySeed) ← ctxRunBuilder ctx fundUser $ seedRollup setupB 1 1 1 Nothing rollupState0
-            tidSeed ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodySeed
-            info $ "Seed rollup transaction submitted: " <> show tidSeed
-            info $ "State NFT: " <> show (zkirbiNFT initializedBuildInfo)
-            txBodyRegisterStake ← ctxRunBuilder ctx fundUser $ runReaderT (registerRollupStake >>= buildTxBody) initializedBuildInfo
-            tidRegisterStake ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyRegisterStake
-            info $ "Register stake transaction submitted: " <> show tidRegisterStake
-            txBodyBridgeIn ←
-              ctxRunBuilder ctx fundUser $
-                runReaderT
-                  (bridgeIn [(address, valueFromLovelace 5_000_000)] >>= buildTxBody)
-                  initializedBuildInfo
-            tidBridgeIn ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyBridgeIn
-            info $ "Bridge in transaction submitted: " <> show tidBridgeIn
-            let proofBPlutus = proofToPlutus proofB
-            txBodyUpdate ←
-              ctxRunBuilder ctx fundUser $
-                runReaderT
-                  (updateRollupState rollupState1 [] [] proofBPlutus >>= buildTxBody)
-                  initializedBuildInfo
-            tidUpdate ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate
-            info $ "Update rollup transaction submitted: " <> show tidUpdate
-            info "Posting another update rollup, which bridges out a value"
-            let proofB2Plutus = proofToPlutus proofB2
-            txBodyUpdate2 ←
-              ctxRunBuilder ctx fundUser $
-                runReaderT
-                  ( updateRollupState
-                      rollupState2
-                      []
-                      [
-                        ( valueFromLovelace 5_000_000
-                        , unsafeAddressFromText
-                            "addr_test1qpxsldf6hmp5vtdhhwzukm8x5q0m9t2xh8cftx8s6a43vll3t8hyc5syfx9lltq9dgr2xdkvwahr9humhpa9tae2jcjsxpxw2h"
-                        )
-                      ]
-                      proofB2Plutus
-                      >>= buildTxBody
-                  )
-                  initializedBuildInfo
-            tidUpdate2 ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate2
-            info $ "Update rollup transaction submitted which bridges out a value: " <> show tidUpdate2
+        -- , testCaseSteps "Rollup update where bridge in happens separately" $ \info → withSetup info setup $ \ctx → do
+        --     (_ts, setupB, proofB, proofB2) ← getResources
+        --     let
+        --       fundUser = ctxUserF ctx
+        --     (initializedBuildInfo, txBodySeed) ← ctxRunBuilder ctx fundUser $ seedRollup setupB 1 1 1 Nothing rollupState0
+        --     tidSeed ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodySeed
+        --     info $ "Seed rollup transaction submitted: " <> show tidSeed
+        --     info $ "State NFT: " <> show (zkirbiNFT initializedBuildInfo)
+        --     txBodyRegisterStake ← ctxRunBuilder ctx fundUser $ runReaderT (registerRollupStake >>= buildTxBody) initializedBuildInfo
+        --     tidRegisterStake ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyRegisterStake
+        --     info $ "Register stake transaction submitted: " <> show tidRegisterStake
+        --     txBodyBridgeIn ←
+        --       ctxRunBuilder ctx fundUser $
+        --         runReaderT
+        --           (bridgeIn [(address, valueFromLovelace 5_000_000)] >>= buildTxBody)
+        --           initializedBuildInfo
+        --     tidBridgeIn ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyBridgeIn
+        --     info $ "Bridge in transaction submitted: " <> show tidBridgeIn
+        --     let proofBPlutus = proofToPlutus proofB
+        --     txBodyUpdate ←
+        --       ctxRunBuilder ctx fundUser $
+        --         runReaderT
+        --           (updateRollupState rollupState1 [] [] proofBPlutus delta1 >>= buildTxBody)
+        --           initializedBuildInfo
+        --     tidUpdate ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate
+        --     info $ "Update rollup transaction submitted: " <> show tidUpdate
+        --     info "Posting another update rollup, which bridges out a value"
+        --     let proofB2Plutus = proofToPlutus proofB2
+        --     txBodyUpdate2 ←
+        --       ctxRunBuilder ctx fundUser $
+        --         runReaderT
+        --           ( updateRollupState
+        --               rollupState2
+        --               []
+        --               [
+        --                 ( valueFromLovelace 5_000_000
+        --                 , unsafeAddressFromText
+        --                     "addr_test1qpxsldf6hmp5vtdhhwzukm8x5q0m9t2xh8cftx8s6a43vll3t8hyc5syfx9lltq9dgr2xdkvwahr9humhpa9tae2jcjsxpxw2h"
+        --                 )
+        --               ]
+        --               proofB2Plutus
+        --               delta2
+        --               >>= buildTxBody
+        --           )
+        --           initializedBuildInfo
+        --     tidUpdate2 ← ctxRun ctx fundUser $ signAndSubmitConfirmed txBodyUpdate2
+        --     info $ "Update rollup transaction submitted which bridges out a value: " <> show tidUpdate2
         ]

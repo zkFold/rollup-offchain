@@ -26,6 +26,7 @@ import Control.Exception (throwIO)
 import Data.Aeson (encode)
 import Data.Bifunctor (Bifunctor (..))
 import Data.ByteString.Lazy (toStrict)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
@@ -70,8 +71,10 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   getTxByHashDb,
   getTxsByAddressDb,
   loadState,
+  lookupPreimagesDb,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types (
+  A,
   BatchDetailResponse (..),
   BatchesResponse (..),
   BridgeInRequest (..),
@@ -143,7 +146,7 @@ handleSubmitTx ctx SubmitTxRequest {..} = do
             then throwIO $ err400 {errBody = "bridge-out value mismatch"}
             else do
               let bridgeOutPairs = map (second addressFromBech32) strBridgeOuts
-              txHash ← enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs
+              txHash ← enqueueTx ctx $ QueuedTx strTransaction strSignatures bridgeOutPairs strInputUtxos
               pure $ SubmitTxResponse "queued" txHash
  where
   validateAddr (out :*: _, (_, addrBech32)) = bech32ToFE addrBech32 == oAddress out
@@ -182,7 +185,7 @@ handleBridgeIn ctx BridgeInRequest {..} = do
   let usedAddrs = map addressFromBech32 birUsedAddresses
       changeAddr = addressFromBech32 birChangeAddress
 
-  txBody ← runSkeletonI ctx usedAddrs changeAddr Nothing $ bridgeIn [(birDestinationAddress, birAmount)]
+  txBody ← runSkeletonI ctx usedAddrs changeAddr (Just (ctxCollateral ctx)) $ bridgeIn [(birDestinationAddress, birAmount)]
 
   let tx = unsignedTx txBody
 
@@ -202,12 +205,23 @@ handleStateInfo ctx = do
   pure $ StateInfoResponse (fmap psLedgerState mState)
 
 -- | Handle L2 UTxO query by address.
+-- Loads the persisted leaf hashes and looks up preimages from the preimage DB,
+-- then filters for UTxOs matching the requested L2 address.
 handleQueryL2Utxos ∷ Ctx → FieldElement RollupBFInterpreter → IO QueryL2UtxosResponse
 handleQueryL2Utxos ctx l2Addr = do
   mState ← loadState (ctxDbPath ctx)
   case mState of
     Nothing → pure $ QueryL2UtxosResponse []
-    Just ps → pure $ QueryL2UtxosResponse (utxosAtL2Address l2Addr (psUtxoPreimage ps))
+    Just (PersistedState _ leafHashes) → do
+      let nullHash = nullUTxOHash @A @I
+          nonNullHashTexts =
+            [ decodeUtf8 . toStrict . Data.Aeson.encode $ h
+            | h ← fromVector leafHashes
+            , h /= nullHash
+            ]
+      preimageMap ← lookupPreimagesDb (ctxDbPath ctx) nonNullHashTexts
+      let matching = filter (\utxo → oAddress (uOutput utxo) == l2Addr) (Map.elems preimageMap)
+      pure $ QueryL2UtxosResponse matching
 
 -- | Handle single transaction lookup by hash.
 handleGetTx ∷ Ctx → Text → IO TxResponse

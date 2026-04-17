@@ -33,4 +33,3 @@ email_templates/*
 !email_templates/dev.html
 !email_templates/default.html
 todo.md
-rollup.db

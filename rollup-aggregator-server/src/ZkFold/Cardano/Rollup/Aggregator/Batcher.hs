@@ -6,31 +6,38 @@ module ZkFold.Cardano.Rollup.Aggregator.Batcher (
   processBatch,
   initialState,
   queryBridgeIns,
+  nullQueuedTx,
 ) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (
   TVar,
   atomically,
+  check,
   newTVarIO,
   readTVar,
+  readTVarIO,
   writeTVar,
  )
-import Control.Exception (Exception, Handler (Handler), catches, displayException)
-import Control.Monad (forM, forever)
-import Data.List (nub)
+import Control.Exception (Exception, Handler (Handler), SomeAsyncException, SomeException, catches, displayException, fromException, throwIO)
+import Control.Monad (forM, forever, when, unless)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.Aeson (encode)
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy (toStrict)
 import Data.Foldable (for_)
 import Data.Function ((&))
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
+import Data.List (nub)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
 import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8)
+import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Word (Word64)
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeNats (natVal, type (+))
 import GeniusYield.Providers.Blockfrost (BlockfrostProviderException)
@@ -42,24 +49,26 @@ import GeniusYield.TxBuilder (buildTxBody, runGYTxMonadIO, signAndSubmitConfirme
 import GeniusYield.TxBuilder.Errors (GYTxMonadException)
 import GeniusYield.Types (
   GYAwaitTxException,
+  GYProviders,
   GYTxId,
   GYValue,
   filterUTxOs,
   gyLogError,
   gyLogInfo,
+  gyLogWarning,
   nonAdaTokenToAssetClass,
   utxoRef,
   utxoValue,
   utxosRemoveTxOutRef,
   utxosToList,
   valueAssetClass,
-  valueToPlutus,
+  valueToPlutus, GYAssetClass (..),
  )
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenValue)
+import System.Timeout (timeout)
 import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Algebra.EllipticCurve.Class (TwistedEdwards (..))
-import ZkFold.Symbolic.Data.EllipticCurve.Point.Affine (AffinePoint (..))
 import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (
@@ -67,28 +76,36 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   dequeueAvailableTxsDb,
   dequeueTxsDb,
   enqueueTxDb,
+  failTxsDb,
+  getPendingTxsWithIdsDb,
   loadState,
-  recordBatchDb,
+  loadStateHistory,
+  lookupPreimagesByRefDb,
+  lookupPreimagesDb,
+  revertProcessingTxsDb,
   revertTxsDb,
-  saveState,
+  saveBatchResultDb,
+  savePreimagesDb,
+  seedPreimageDbFromOldState,
  )
 import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
-import ZkFold.Cardano.Rollup.Api.Utils (stateToRollupState)
+import ZkFold.Cardano.Rollup.Api.Utils (computeDelta, feToInteger, stateToRollupState)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
 import ZkFold.Cardano.Rollup.Utils (proofToPlutus)
-import ZkFold.Cardano.UPLC.RollupSimple.Types (BridgeUtxoStatus (..))
+import ZkFold.Cardano.UPLC.RollupSimple.Types (BridgeUtxoStatus (..), RollupState (..))
 import ZkFold.Data.MerkleTree (Leaves)
 import ZkFold.Data.Vector (Vector, fromVector)
 import ZkFold.Protocol.NonInteractiveProof (TrustedSetup, powersOfTauSubset)
 import ZkFold.Protocol.Plonkup.Prover (PlonkupProverSecret (..))
 import ZkFold.Symbolic.Data.Bool (BoolType (false))
 import ZkFold.Symbolic.Data.Bool qualified as ZkBool
+import ZkFold.Symbolic.Data.EllipticCurve.Point.Affine (AffinePoint (..))
+import ZkFold.Symbolic.Data.FieldElement (FieldElement)
 import ZkFold.Symbolic.Data.Hash (Hash (hHash), hash)
 import ZkFold.Symbolic.Data.MerkleTree qualified as SymMerkle
 import ZkFold.Symbolic.Ledger.Circuit.Compile (
   LedgerCircuit,
-  LedgerCircuitGates,
   LedgerContractInput (..),
   ledgerCircuit,
   ledgerProof,
@@ -99,37 +116,58 @@ import ZkFold.Symbolic.Ledger.Types
 import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 -- | In-process mutable state and cryptographic material for the batcher.
+--
+-- ChainSync is the single source of truth for state and Merkle tree leaf hashes.
+-- The Batcher reads state from ChainSync's TVars and constructs the preimage
+-- from the @utxo_preimages@ DB table. The tree is derived from the preimage
+-- (guaranteed consistent after the @search@ fix in symbolic-base).
 data BatcherState = BatcherState
-  { bsLedgerStateVar ∷ !(TVar (State Ud A I))
-  , bsUtxoPreimageVar ∷ !(TVar (Leaves Ud (UTxO A I)))
+  { bsLedgerStateVar ∷ !(TVar (State I))
+  -- ^ Rollup state. Written by ChainSync only.
+  , bsLeafHashesVar ∷ !(TVar (Leaves Ud (FieldElement I)))
+  -- ^ Merkle tree leaf hashes. Written by ChainSync only.
   , bsMerkleTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
-  , bsTrustedSetup ∷ !(TrustedSetup (LedgerCircuitGates + 6))
+  -- ^ Merkle tree derived from leaf hashes. Written by ChainSync only.
+  , bsTrustedSetup ∷ !(TrustedSetup (G + 6))
   , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A S N TxCount)
   , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
+  , bsStateHistoryVar ∷ !(TVar [(Word64, State I, Leaves Ud (FieldElement I))])
+  -- ^ State history for rollback recovery. Written by ChainSync, persisted to SQLite.
+  -- Each entry is (slotNo, state, leafHashes). Most recent first, capped at 20.
+  , bsChainSyncAliveVar ∷ !(TVar UTCTime)
+  -- ^ Last time ChainSync processed a block. Bumped on every roll-forward/roll-backward.
+  -- The Batcher checks this to detect a stuck ChainSync thread.
   }
 
 -- | Initialise batcher state by loading persisted state from the SQLite database.
 initBatcherState ∷ FilePath → IO BatcherState
 initBatcherState dbPath = do
+  -- One-time migration: seed preimage DB from old-format persisted state.
+  seedPreimageDbFromOldState dbPath
   mPersisted ← loadState dbPath
-  let (initSt, initUtxo) = case mPersisted of
-        Just (PersistedState st utxo) → (st, utxo)
-        Nothing → (initialState, initialUtxoPreimage)
-      initTree = SymMerkle.fromLeaves (fmap (hHash . hash) initUtxo)
+  let (initSt, initLH) = case mPersisted of
+        Just (PersistedState st lh) → (st, lh)
+        Nothing → (initialState, initialLeafHashes)
+      initTree = SymMerkle.fromLeaves initLH
   stateVar ← newTVarIO initSt
-  utxoVar ← newTVarIO initUtxo
+  leafHashesVar ← newTVarIO initLH
   treeVar ← newTVarIO initTree
+  history ← loadStateHistory dbPath
+  historyVar ← newTVarIO history
+  now ← getCurrentTime
+  aliveVar ← newTVarIO now
   ts ← powersOfTauSubset
   let circuit = ledgerCircuit @Bi @Bo @Ud @A @S @N @TxCount @I
       proverSecret = PlonkupProverSecret (pure zero)
-  pure $ BatcherState stateVar utxoVar treeVar ts circuit proverSecret
- where
-  initialUtxoPreimage = pure (nullUTxO @A @I)
+  pure $ BatcherState stateVar leafHashesVar treeVar ts circuit proverSecret historyVar aliveVar
+
+initialLeafHashes ∷ Leaves Ud (FieldElement I)
+initialLeafHashes = pure (nullUTxOHash @A @I)
 
 emptyTree ∷ SymMerkle.MerkleTree Ud I
-emptyTree = SymMerkle.fromLeaves (pure (nullUTxOHash @A @I))
+emptyTree = SymMerkle.fromLeaves initialLeafHashes
 
-initialState ∷ State Ud A I
+initialState ∷ State I
 initialState =
   State
     { sPreviousStateHash = zero
@@ -138,24 +176,87 @@ initialState =
     }
 
 -- | Enqueue a transaction by writing it to the SQLite database.
--- Both output addresses (receiving) and input addresses (spending, resolved from
--- the persisted UTxO preimage) are stored in 'tx_addresses' for indexed lookup.
+--
+-- If the user provides input UTxOs ('qtInputUtxos'), verifies that:
+--   1. Each non-null input ref has a matching user-provided UTxO.
+--   2. Each provided UTxO's hash exists in the preimage DB (best-effort).
+--
+-- If no input UTxOs are provided (empty list), falls back to resolving input
+-- addresses from the preimage DB (by output ref lookup).
+--
 -- Returns the transaction hash (JSON-encoded txId field element).
+-- Throws an error if verification fails.
 enqueueTx ∷ Ctx → QueuedTx → IO Text
 enqueueTx ctx queued = do
   let tx = qtTransaction queued
+      providedUtxos = filter (/= nullUTxO) (qtInputUtxos queued)
       outs = fromVector (unComp1 (outputs tx))
       outAddrs = map (\(out :*: _) → decodeUtf8 . toStrict . encode $ oAddress out) outs
-      inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
-  mState ← loadState (ctxDbPath ctx)
-  let inAddrs = case mState of
-        Nothing → []
-        Just ps →
-          let utxoList = filter (/= nullUTxO) $ fromVector (psUtxoPreimage ps)
-           in [ decodeUtf8 . toStrict . encode $ oAddress (uOutput u)
-              | ref ← inRefs, u ← utxoList, uRef u == ref
-              ]
-  enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
+
+  if null providedUtxos
+    then do
+      -- Backward-compatible path: resolve addresses from preimage DB.
+      let inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
+          refTexts = map (decodeUtf8 . toStrict . encode) inRefs
+      matchedUtxos ← lookupPreimagesByRefDb (ctxDbPath ctx) refTexts
+      let inAddrs = map (decodeUtf8 . toStrict . encode . oAddress . uOutput) matchedUtxos
+      enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
+    else do
+      -- Strict path: user provides input UTxOs.
+      let inRefs = filter (/= nullOutputRef) $ fromVector (unComp1 (inputs tx))
+      -- Verify: each non-null input ref must have a matching user-provided UTxO.
+      let mismatched = [ref | ref ← inRefs, not (any (\u → uRef u == ref) providedUtxos)]
+      if not (null mismatched)
+        then throwIO $ userError "enqueueTx: input UTxO data missing for one or more non-null inputs"
+        else do
+          -- Best-effort hash verification against preimage DB.
+          let hashTexts =
+                [ decodeUtf8 . toStrict . encode $ (hHash (hash u) ∷ FieldElement I)
+                | u ← providedUtxos
+                ]
+          preimageMap ← lookupPreimagesDb (ctxDbPath ctx) hashTexts
+          let unknownCount = length [() | ht ← hashTexts, not (Map.member ht preimageMap)]
+          when (unknownCount > 0) $
+            gyLogWarning (ctxProviders ctx) mempty $
+              "enqueueTx: "
+                <> show unknownCount
+                <> " provided UTxO(s) not found in preimage DB (may be from pending txs or external aggregator)"
+          let inAddrs = map (decodeUtf8 . toStrict . encode . oAddress . uOutput) providedUtxos
+          enqueueTxDb (ctxDbPath ctx) queued (nub (outAddrs ++ inAddrs))
+
+-- | Revalidate all pending transactions against the current state.
+-- Looks up alive UTxO refs by cross-referencing the current leaf hashes
+-- (from ChainSync) with the preimage DB. Transactions referencing unknown
+-- or consumed inputs are marked as 'failed'.
+revalidatePendingTxs ∷ Ctx → BatcherState → IO ()
+revalidatePendingTxs Ctx {..} BatcherState {..} = do
+  pending ← getPendingTxsWithIdsDb ctxDbPath
+  unless (null pending) $ do
+    leafHashes ← readTVarIO bsLeafHashesVar
+    let nullHash = nullUTxOHash @A @I
+        nonNullHashTexts =
+          [ decodeUtf8 . toStrict . encode $ h
+          | h ← fromVector leafHashes
+          , h /= nullHash
+          ]
+    preimageMap ← lookupPreimagesDb ctxDbPath nonNullHashTexts
+    -- Build a map keyed by JSON-encoded ref text for O(log n) lookup.
+    -- OutputRef I has no Ord instance so we can't use Set directly.
+    let encodeRef = decodeUtf8 . toStrict . encode
+        knownRefTexts = Map.fromList [(encodeRef (uRef u), ()) | u ← Map.elems preimageMap]
+        isInputValid ref = ref == nullOutputRef || Map.member (encodeRef ref) knownRefTexts
+        invalidIds =
+          [ tid
+          | (tid, qtx) ← pending
+          , let inRefs = fromVector (unComp1 (inputs (qtTransaction qtx)))
+          , not (all isInputValid inRefs)
+          ]
+    unless (null invalidIds) $ do
+      gyLogInfo ctxProviders mempty $
+        "Revalidation: failing "
+          <> show (length invalidIds)
+          <> " pending txs with consumed inputs"
+      failTxsDb ctxDbPath invalidIds
 
 -- | Query the rollup address for 'BridgeInInitial' UTxOs, returning L2 address and value.
 queryBridgeIns ∷ Ctx → IO [(Integer, GYValue)]
@@ -172,10 +273,31 @@ queryBridgeIns ctx = runQuery ctx $ do
       initials ← forM others $ \u → do
         datumTuple ← utxoDatum @_ @BridgeUtxoStatus u
         case datumTuple of
-          Right (_, _, BridgeInInitial addr) → pure $ Just (addr, utxoValue u)
+          Right (_, val, BridgeInInitial addr) → if valueAssetClass val GYLovelace >= 5000000 then  pure $ Just (addr, utxoValue u) else pure Nothing
           _ → pure Nothing
       pure $ catMaybes initials
     _ → pure []
+
+-- | Query the on-chain rollup state UTxO's UTxO tree root.
+-- Returns 'Nothing' if the state UTxO is not found or the datum cannot be decoded.
+-- Used to detect ChainSync staleness before generating a ZK proof: if the batcher's
+-- in-memory tree root (from 'bsLedgerStateVar') does not match the on-chain root,
+-- ChainSync has not yet replayed all historical blocks and batching must be skipped.
+queryOnChainUTxORoot ∷ Ctx → IO (Maybe Integer)
+queryOnChainUTxORoot ctx = runQuery ctx $ do
+  nft ← asks zkirbiNFT
+  rollupAddr ← rollupAddress
+  allUtxos ← utxosAtAddress rollupAddr Nothing
+  let stateUtxos =
+        filterUTxOs (\u → valueAssetClass (utxoValue u) (nonAdaTokenToAssetClass nft) == 1) allUtxos
+          & utxosToList
+  case stateUtxos of
+    [stateUtxo] → do
+      datumResult ← utxoDatum @_ @RollupState stateUtxo
+      case datumResult of
+        Right (_, _, rs) → pure (Just (utxoTreeRoot rs))
+        _ → pure Nothing
+    _ → pure Nothing
 
 -- | Convert a list of (L2 address, GYValue) pairs into the symbolic bridge-in representation.
 -- Takes up to 'Bi' items and pads the rest with 'nullOutput'.
@@ -221,6 +343,7 @@ nullQueuedTx =
           }
     , qtSignatures = Comp1 (pure (zero :*: zero :*: zero))
     , qtBridgeOuts = []
+    , qtInputUtxos = []
     }
 
 -- | Run the batcher loop (blocking). Polls the database at the configured interval
@@ -228,30 +351,90 @@ nullQueuedTx =
 -- * enough real transactions are queued (≥ bcBatchTransactions), or
 -- * there are pending bridge-ins on L1 (remaining slots are padded with null txs).
 startBatcher ∷ Ctx → BatcherState → IO ()
-startBatcher ctx@Ctx {..} bs = forever $ do
-  let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
-  threadDelay delayMicros
-  bridgeInData ← queryBridgeIns ctx
-  if not (null bridgeInData)
-    then do
-      -- Bridge-ins pending: trigger a batch even with fewer than TxCount real txs,
-      -- padding the remainder with null transactions.
-      let txCount = fromIntegral (natVal (Proxy @TxCount))
-      available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
-      let (ids, qtxs) = unzip available
-          padded = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
-      processBatchWithLogging ctx bs ids padded
-    else do
-      mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
-      for_ mQueued $ \pairs →
-        let (ids, qtxs) = unzip pairs
-         in processBatchWithLogging ctx bs ids qtxs
+startBatcher ctx@Ctx {..} bs = do
+  -- Crash recovery: revert any txs that were left in 'processing' state from a
+  -- prior run. Without this they would be stuck until ChainSync detects a state
+  -- change, and in the worst case (L1 confirmed but DB not updated) they could
+  -- be silently orphaned.
+  revertProcessingTxsDb ctxDbPath
+  -- Track ChainSync's chain length to detect external updates and for waitForChainSync.
+  lastChainSyncLenRef ← readTVarIO (bsLedgerStateVar bs) >>= newTVarIO . feToInteger . sLength
+  chainSyncWarnedRef ← newIORef False
+  forever $ do
+    let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
+    threadDelay delayMicros
+    -- Check ChainSync liveness: warn if no block processed in 5 minutes.
+    now ← getCurrentTime
+    lastAlive ← readTVarIO (bsChainSyncAliveVar bs)
+    let staleSecs = realToFrac (diffUTCTime now lastAlive) ∷ Double
+    alreadyWarned ← readIORef chainSyncWarnedRef
+    if staleSecs > 300
+      then
+        unless alreadyWarned $ do
+          gyLogWarning ctxProviders mempty $
+            "ChainSync appears stuck: no block processed in " <> show (round staleSecs ∷ Int) <> "s"
+          writeIORef chainSyncWarnedRef True
+      else
+        when alreadyWarned $ do
+          gyLogInfo ctxProviders mempty "ChainSync recovered, processing blocks again"
+          writeIORef chainSyncWarnedRef False
+    -- Detect state changes from ChainSync (external updates or rollbacks).
+    -- bsLedgerStateVar is written ONLY by ChainSync, so changes indicate
+    -- on-chain state updates.
+    currentLen ← feToInteger . sLength <$> readTVarIO (bsLedgerStateVar bs)
+    prevLen ← readTVarIO lastChainSyncLenRef
+    when (currentLen /= prevLen) $ do
+      gyLogInfo ctxProviders mempty $
+        "ChainSync state changed (len "
+          <> show prevLen
+          <> " → "
+          <> show currentLen
+          <> "), revalidating pending txs"
+      revertProcessingTxsDb ctxDbPath
+      revalidatePendingTxs ctx bs
+      atomically $ writeTVar lastChainSyncLenRef currentLen
+    -- Guard: verify ChainSync's in-memory state matches the on-chain rollup state
+    -- before generating any ZK proof. If chain sync is still replaying history (e.g.
+    -- fresh start from genesis with no persisted checkpoint), the UTxO tree roots will
+    -- diverge and any proof built from the stale local state will be rejected on-chain.
+    localRoot ← feToInteger . sUTxO <$> readTVarIO (bsLedgerStateVar bs)
+    mOnChainRoot ← queryOnChainUTxORoot ctx
+    let chainSyncCaughtUp = case mOnChainRoot of
+          Just onChainRoot → onChainRoot == localRoot
+          Nothing → True -- no state UTxO yet (rollup not deployed); safe to proceed
+    if not chainSyncCaughtUp
+      then
+        gyLogWarning ctxProviders mempty $
+          "ChainSync not yet caught up to on-chain state (local root "
+            <> show localRoot
+            <> " ≠ on-chain root "
+            <> show (maybe 0 id mOnChainRoot)
+            <> "), skipping batch cycle"
+      else do
+        -- Process batches.
+        bridgeInData ← queryBridgeIns ctx
+        if not (null bridgeInData)
+          then do
+            -- Bridge-ins pending: trigger a batch even with fewer than TxCount real txs,
+            -- padding the remainder with null transactions.
+            let txCount = fromIntegral (natVal (Proxy @TxCount))
+            available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
+            let (ids, qtxs) = unzip available
+                padded = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
+            processBatchWithLogging ctx bs ids padded lastChainSyncLenRef
+          else do
+            mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
+            for_ mQueued $ \pairs →
+              let (ids, qtxs) = unzip pairs
+               in processBatchWithLogging ctx bs ids qtxs lastChainSyncLenRef
 
-processBatchWithLogging ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO ()
-processBatchWithLogging ctx@Ctx {..} bs ids queued =
+processBatchWithLogging ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → TVar Integer → IO ()
+processBatchWithLogging ctx@Ctx {..} bs ids queued lastLenRef =
   ( do
       tid ← processBatch ctx bs ids queued
       gyLogInfo ctxProviders mempty $ "Batch submitted: " <> show tid
+      -- Wait for ChainSync to process the block.
+      waitForChainSync ctx bs lastLenRef
   )
     `catches` [ Handler (\(err ∷ GYTxMonadException) → revert >> logException "GYTxMonadException" err)
               , Handler (\(err ∷ SubmitTxException) → revert >> logException "SubmitTxException" err)
@@ -260,6 +443,12 @@ processBatchWithLogging ctx@Ctx {..} bs ids queued =
               , Handler (\(err ∷ MaestroProviderException) → revert >> logException "MaestroProviderException" err)
               , Handler (\(err ∷ KupoProviderException) → revert >> logException "KupoProviderException" err)
               , Handler (\(err ∷ OgmiosProviderException) → revert >> logException "OgmiosProviderException" err)
+              -- Catch-all: covers IOErrors from DB writes, ErrorCall from pure code, etc.
+              -- Re-throws async exceptions (ThreadKilled, StackOverflow) so they still propagate.
+              , Handler $ \(err ∷ SomeException) →
+                  case fromException err of
+                    Just (_ ∷ SomeAsyncException) → throwIO err
+                    Nothing → revert >> logException "SomeException" err
               ]
  where
   revert = revertTxsDb ctxDbPath ids
@@ -268,17 +457,76 @@ processBatchWithLogging ctx@Ctx {..} bs ids queued =
     gyLogError ctxProviders mempty $
       "Batch processing failed (" <> label <> "): " <> displayException err
 
+-- | Wait for ChainSync to process the block by watching ChainSync's own
+-- state TVar (which only ChainSync writes to). Times out after 120 seconds.
+waitForChainSync ∷ Ctx → BatcherState → TVar Integer → IO ()
+waitForChainSync Ctx {..} BatcherState {..} lastChainSyncLenRef = do
+  prevLen ← readTVarIO lastChainSyncLenRef
+  gyLogInfo ctxProviders mempty "Waiting for ChainSync to confirm state update..."
+  mResult ← timeout 120_000_000 $ atomically $ do
+    st ← readTVar bsLedgerStateVar
+    let currentLen = feToInteger (sLength st)
+    check (currentLen > prevLen)
+  case mResult of
+    Nothing →
+      gyLogWarning
+        ctxProviders
+        mempty
+        "Timed out waiting for ChainSync (120s). Proceeding."
+    Just () → do
+      newLen ← feToInteger . sLength <$> readTVarIO bsLedgerStateVar
+      atomically $ writeTVar lastChainSyncLenRef newLen
+      gyLogInfo ctxProviders mempty "ChainSync confirmed state update"
+
+-- | Construct the UTxO preimage vector by looking up leaf hashes in the preimage DB.
+-- For each leaf hash:
+--   * nullUTxOHash → nullUTxO (empty slot, no DB lookup needed)
+--   * found in DB → the stored UTxO
+--   * not found in DB → nullUTxO (unknown external UTxO)
+constructPreimage ∷ GYProviders → FilePath → Leaves Ud (FieldElement I) → IO (Leaves Ud (UTxO A I))
+constructPreimage providers dbPath leafHashes = do
+  let nullHash = nullUTxOHash @A @I
+      hashList = fromVector leafHashes
+      nonNullHashes = filter (/= nullHash) hashList
+      nonNullHashTexts = map (decodeUtf8 . toStrict . encode) nonNullHashes
+  preimageMap ← lookupPreimagesDb dbPath nonNullHashTexts
+  let missed = length nonNullHashes - Map.size preimageMap
+  when (missed > 0) $
+    -- This indicates a key mismatch between what ChainSync stored
+    -- (from delta) and what the Batcher stored (from updateLedgerState).
+    gyLogWarning providers mempty $
+      "constructPreimage: "
+        <> show missed
+        <> " of "
+        <> show (length nonNullHashes)
+        <> " non-null leaf hashes NOT found in preimage DB"
+  pure $
+    fmap
+      ( \h →
+          if h == nullHash
+            then nullUTxO @A @I
+            else
+              let key = decodeUtf8 . toStrict . encode $ h
+               in Map.findWithDefault (nullUTxO @A @I) key preimageMap
+      )
+      leafHashes
+
 processBatch ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
 processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
-  (prevState, prevUtxoPreimage, prevTree) ←
+  -- Read state from ChainSync's TVar, construct preimage from DB, derive tree.
+  -- With the search fix in symbolic-base, fromLeaves(fmap(hHash.hash) preimage)
+  -- produces the same tree as updateLedgerState's output.
+  (prevState, prevLeafHashes) ←
     atomically $
-      (,,) <$> readTVar bsLedgerStateVar <*> readTVar bsUtxoPreimageVar <*> readTVar bsMerkleTreeVar
+      (,) <$> readTVar bsLedgerStateVar <*> readTVar bsLeafHashesVar
+  prevUtxoPreimage ← constructPreimage ctxProviders ctxDbPath prevLeafHashes
+  let prevTree = SymMerkle.fromLeaves (fmap (hHash . hash) prevUtxoPreimage)
   bridgeInData ← queryBridgeIns ctx
   let bridgedIn = toBridgedIn bridgeInData
       batch = TransactionBatch {tbTransactions = unsafeToVector' (map qtTransaction queuedTxs)}
       sigMaterial = Comp1 (unsafeToVector' (map qtSignatures queuedTxs))
       allBridgeOuts = concatMap qtBridgeOuts queuedTxs
-      newState :*: witness :*: newTree :*: preimageWrapped =
+      newState :*: witness :*: _newTree :*: preimageWrapped =
         updateLedgerState prevState prevTree prevUtxoPreimage bridgedIn batch sigMaterial
       newPreimage = unComp1 preimageWrapped
       lci =
@@ -289,7 +537,7 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
           , lciStateWitness = witness
           }
       proof =
-        ledgerProof @ByteString
+        ledgerProof @_ @ByteString
           bsTrustedSetup
           bsProverSecret
           bsLedgerCircuit
@@ -297,7 +545,19 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
       proofBytes = mkProof proof
       proofPlutus = proofToPlutus proofBytes
       rollupState = stateToRollupState newState
+      delta = computeDelta witness batch bridgedIn newState
       collateral = Just (ctxCollateral, False)
+  -- Store new UTxO preimages in the DB BEFORE submitting the L1 transaction.
+  -- This ensures that if the process crashes after L1 confirm but before
+  -- saveBatchResultDb completes, the preimage DB is still consistent with
+  -- the on-chain state that ChainSync will observe on restart.
+  let newEntries =
+        [ (hHash (hash utxo), uRef utxo, utxo)
+        | utxo ← fromVector newPreimage
+        , utxo /= nullUTxO @A @I
+        ]
+  savePreimagesDb ctxDbPath newEntries
+  -- Submit the L1 transaction.
   submittedTxId ←
     runGYTxMonadIO
       ctxNetworkId
@@ -313,13 +573,9 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         -- to see BridgeIn outputs not covered by the ZK proof.
         let biCount = fromIntegral (natVal (Proxy @Bi))
             bridgeInsForL1 = take biCount $ map (\(addr, val) → (val, fromConstant addr)) bridgeInData
-        skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus) ctxRollupBuildInfo
+        skel ← runReaderT (updateRollupState rollupState bridgeInsForL1 allBridgeOuts proofPlutus delta) ctxRollupBuildInfo
         body ← buildTxBody skel
         signAndSubmitConfirmed body
-  atomically $ do
-    writeTVar bsLedgerStateVar newState
-    writeTVar bsUtxoPreimageVar newPreimage
-    writeTVar bsMerkleTreeVar newTree
-  saveState ctxDbPath newState newPreimage
-  recordBatchDb ctxDbPath ids (Text.pack (show submittedTxId))
+  -- Atomically: store preimages + record batch + mark txs as batched.
+  saveBatchResultDb ctxDbPath newEntries ids (Text.pack (show submittedTxId))
   pure submittedTxId

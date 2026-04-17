@@ -10,7 +10,9 @@ module ZkFold.Cardano.Rollup.Aggregator.Types (
   TxCount,
   Tx,
   TxSignatures,
+  G,
   QueuedTx (..),
+  SymUTxO,
 
   -- * API Types
   SubmitTxRequest (..),
@@ -52,6 +54,7 @@ import Data.Time.Clock (UTCTime)
 import Deriving.Aeson
 import GHC.Generics ((:*:) (..), (:.:) (..))
 import GHC.TypeLits (Symbol)
+import GHC.TypeNats (type (^))
 import GeniusYield.Swagger.Utils (dropSymbolAndCamelToSnake)
 import GeniusYield.Types (GYAddress, GYAddressBech32, GYTx, GYTxId, GYTxWitness, GYValue, LowerFirst)
 import GeniusYield.Types.OpenApi ()
@@ -84,10 +87,18 @@ type Tx = Transaction N A I
 
 type TxSignatures = (Vector S :.: (PublicKey :*: EdDSAPoint :*: EdDSAScalarField)) I
 
+type G = 2 ^ 18
+
+-- | Type alias for a symbolic UTxO in the interpreter context.
+type SymUTxO = UTxO A I
+
 data QueuedTx = QueuedTx
   { qtTransaction ∷ !Tx
   , qtSignatures ∷ !TxSignatures
   , qtBridgeOuts ∷ ![(GYValue, GYAddress)]
+  , qtInputUtxos ∷ ![SymUTxO]
+  -- ^ User-provided full UTxO data for each non-null input. Used to resolve
+  -- input addresses and as witness data when the aggregator's preimage is unknown.
   }
   deriving stock Generic
   deriving
@@ -147,6 +158,8 @@ data SubmitTxRequest = SubmitTxRequest
   { strTransaction ∷ !Tx
   , strSignatures ∷ !TxSignatures
   , strBridgeOuts ∷ ![(GYValue, GYAddressBech32)]
+  , strInputUtxos ∷ ![SymUTxO]
+  -- ^ Full UTxO data for each non-null input the transaction spends.
   }
   deriving stock Generic
   deriving
@@ -388,7 +401,7 @@ type StateInfoResPrefix ∷ Symbol
 type StateInfoResPrefix = "sir"
 
 newtype StateInfoResponse = StateInfoResponse
-  { sirState ∷ Maybe (State Ud A I)
+  { sirState ∷ Maybe (State I)
   }
   deriving stock Generic
   deriving
@@ -418,12 +431,11 @@ data TxStatus = TxPending | TxProcessing | TxBatched
     via CustomJSON '[ConstructorTagModifier '[StripPrefix "Tx", LowerFirst]] TxStatus
 
 instance ToSchema TxStatus where
-  declareNamedSchema proxy =
+  declareNamedSchema =
     OpenApi.genericDeclareNamedSchema
       OpenApi.defaultSchemaOptions
         { OpenApi.constructorTagModifier = go
         }
-      proxy
    where
     go s = case drop 2 s of
       [] → []
