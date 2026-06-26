@@ -119,6 +119,10 @@ logConfig tag logInfoS ctx serverConfig = do
       <> show (coreConfigFromServerConfig serverConfig)
       <> "\nDB Path: "
       <> ctxDbPath ctx
+      <> "\nSync Mode: "
+      <> show (resolveSyncMode serverConfig)
+      <> "\nNode Socket Path: "
+      <> maybe "<none>" id (ctxNodeSocketPath ctx)
 
 runServer ∷ Maybe FilePath → IO ()
 runServer mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
@@ -170,8 +174,15 @@ runBatcher mConfigPath = withCtx mConfigPath $ \serverConfig ctx → do
   let logInfoS = gyLogInfo (ctxProviders ctx) mempty
   logConfig "Batcher" logInfoS ctx serverConfig
   batcherState ← initBatcherState (ctxDbPath ctx)
-  -- Start chain sync in background.
-  let socketPath = ctxNodeSocketPath ctx
-  logInfoS $ "Starting chain sync client (socket: " <> socketPath <> ")"
-  _chainSyncAsync ← startChainSync ctx batcherState socketPath (scChainSyncStartPoint serverConfig)
-  startBatcher ctx batcherState
+  let syncMode = resolveSyncMode serverConfig
+  case syncMode of
+    SyncNode → do
+      socketPath ← case ctxNodeSocketPath ctx of
+        Just path → pure path
+        Nothing → throwIO $ userError "nodeSocketPath is required when syncMode is node"
+      logInfoS $ "Starting chain sync client (socket: " <> socketPath <> ")"
+      _chainSyncAsync ← startChainSync ctx batcherState socketPath (scChainSyncStartPoint serverConfig)
+      startBatcher syncMode ctx batcherState
+    SyncLight → do
+      logInfoS "Starting batcher in light sync mode (Maestro-only, no local node)"
+      startBatcher syncMode ctx batcherState

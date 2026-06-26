@@ -3,6 +3,7 @@ module Main (main) where
 import GeniusYield.Test.Privnet.Setup (cardanoDefaultTestnetOptionsConway, withPrivnet)
 import Test.Tasty (defaultMain, testGroup)
 
+import ZkFold.Cardano.Rollup.Aggregator.Test.Config (configTests)
 import ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd (endToEndTests)
 import ZkFold.Cardano.Rollup.Aggregator.Test.Validation (validationTests)
 
@@ -12,6 +13,7 @@ main =
     defaultMain $
       testGroup
         "rollup-aggregator-server-tests"
-        [ validationTests
+        [ configTests
+        , validationTests
         , endToEndTests setup
         ]

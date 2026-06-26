@@ -38,7 +38,6 @@ common common
     -Wincomplete-uni-patterns
     -Wunused-packages
     -threaded
-    "-with-rtsopts=-A128M -AL256m -qb0 -N"
 
 library
   import: common
@@ -119,6 +118,7 @@ test-suite rollup-aggregator-server-tests
     -with-rtsopts=-I0
 
   other-modules:
+    ZkFold.Cardano.Rollup.Aggregator.Test.Config
     ZkFold.Cardano.Rollup.Aggregator.Test.EndToEnd
     ZkFold.Cardano.Rollup.Aggregator.Test.Validation
 
@@ -144,6 +144,8 @@ executable rollup-aggregator-server
   import: common
   main-is: Main.hs
   hs-source-dirs: app
+  ghc-options:
+    "-with-rtsopts=-A128M -AL256m -qb0 -N"
   build-depends:
     base,
     optparse-applicative,

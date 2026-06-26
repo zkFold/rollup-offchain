@@ -322,8 +322,8 @@ updateCheckpoint SyncState {..} slot blockHash = do
 
 -- | Reset all state to genesis (initial state, empty tree, empty history).
 -- Persists the reset to SQLite so it survives a crash.
-resetToGenesis ∷ Ctx → BatcherState → SyncState → IO ()
-resetToGenesis ctx bs ss = do
+_resetToGenesis ∷ Ctx → BatcherState → SyncState → IO ()
+_resetToGenesis ctx bs ss = do
   let initLH = pure (nullUTxOHash @A @I)
   atomically $ do
     writeTVar (bsLedgerStateVar bs) initialState
@@ -340,7 +340,7 @@ resetToGenesis ctx bs ss = do
 -- Much faster than a full genesis resync when the checkpoint is recent.
 --
 -- If no checkpoint has been saved yet (ssCheckpointRef = ChainPointAtGenesis),
--- this behaves identically to 'resetToGenesis'.
+-- this behaves identically to a genesis reset.
 resetToCheckpoint ∷ Ctx → BatcherState → SyncState → IO ()
 resetToCheckpoint ctx bs ss = do
   checkpoint ← readIORef (ssCheckpointRef ss)
