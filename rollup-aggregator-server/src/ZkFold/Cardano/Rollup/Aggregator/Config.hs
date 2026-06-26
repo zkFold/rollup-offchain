@@ -3,11 +3,14 @@ module ZkFold.Cardano.Rollup.Aggregator.Config (
   ServerConfig (..),
   BatchConfig (..),
   ChainSyncStartPoint (..),
+  SyncMode (..),
 
   -- * Configuration Loading
   serverConfigOptionalFPIO,
   signingKeyFromServerConfig,
   coreConfigFromServerConfig,
+  resolveSyncMode,
+  resolveSyncModeFields,
 ) where
 
 import Control.Exception (throwIO)
@@ -63,6 +66,13 @@ data ChainSyncStartPoint = ChainSyncStartPoint
     (FromJSON, ToJSON)
     via CustomJSON '[FieldLabelModifier '[StripPrefix "cssp", LowerFirst]] ChainSyncStartPoint
 
+-- | Source of L1 rollup state updates for the batcher.
+data SyncMode = SyncNode | SyncLight
+  deriving stock (Eq, Generic, Show)
+  deriving
+    (FromJSON, ToJSON)
+    via CustomJSON '[ConstructorTagModifier '[StripPrefix "Sync", LowerFirst]] SyncMode
+
 -- | Batch processing configuration.
 data BatchConfig = BatchConfig
   { bcBatchTransactions ∷ !Natural
@@ -111,8 +121,11 @@ data ServerConfig = ServerConfig
   -- ^ API key.
   , scDbPath ∷ !FilePath
   -- ^ SQLite database file path for the transaction queue and ledger state.
-  , scNodeSocketPath ∷ !FilePath
-  -- ^ Path to the cardano-node socket. Used for chain sync.
+  , scSyncMode ∷ !(Maybe SyncMode)
+  -- ^ State sync mode. Defaults to node mode when 'scNodeSocketPath' is present,
+  -- otherwise light mode.
+  , scNodeSocketPath ∷ !(Maybe FilePath)
+  -- ^ Path to the cardano-node socket. Required in node sync mode.
   , scChainSyncStartPoint ∷ !(Maybe ChainSyncStartPoint)
   -- ^ Optional starting chain point for first-run chain sync.
   -- When absent, syncing begins from genesis. When present, this slot/hash
@@ -182,3 +195,15 @@ coreConfigFromServerConfig ServerConfig {..} =
     , cfgLogging = scLogging
     , cfgLogTiming = Nothing
     }
+
+resolveSyncMode ∷ ServerConfig → SyncMode
+resolveSyncMode ServerConfig {..} = resolveSyncModeFields scSyncMode scNodeSocketPath
+
+resolveSyncModeFields ∷ Maybe SyncMode → Maybe FilePath → SyncMode
+resolveSyncModeFields mSyncMode mNodeSocketPath =
+  fromMaybe inferredMode mSyncMode
+ where
+  inferredMode =
+    case mNodeSocketPath of
+      Just _ → SyncNode
+      Nothing → SyncLight

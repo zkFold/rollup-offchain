@@ -75,11 +75,13 @@ batchConfig:
 apiKey: SERVER_API_KEY
 # File path where to persist rollup-state. When starting from initial state, this file can be empty.
 dbPath: rollup.db
-# Access to socket path of running cardano node for chain sync event listener to track the accumulating onchain L2 state.
-nodeSocketPath: path/to/node.socket
-chainSyncStartPoint:
-  slot: 120542468
-  blockHash: 5c55360e637428f54e7fa891cd1fb29b094599090a0f7ffb09492cc033ab39b0
+# Use light mode for a Maestro-only demo without a local cardano-node socket.
+syncMode: light
+# For full node sync, use syncMode: node and configure the node socket:
+# nodeSocketPath: path/to/node.socket
+# chainSyncStartPoint:
+#   slot: 120542468
+#   blockHash: 5c55360e637428f54e7fa891cd1fb29b094599090a0f7ffb09492cc033ab39b0
 maxBridgeIn: 1
 maxBridgeOut: 1
 maxOutputAssets: 2

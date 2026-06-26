@@ -4,6 +4,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Batcher (
   startBatcher,
   enqueueTx,
   processBatch,
+  processBatchLight,
   initialState,
   queryBridgeIns,
   nullQueuedTx,
@@ -69,7 +70,7 @@ import System.Timeout (timeout)
 import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Algebra.EllipticCurve.Class (TwistedEdwards (..))
-import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..))
+import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..), SyncMode (..))
 import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
 import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   PersistedState (..),
@@ -85,6 +86,7 @@ import ZkFold.Cardano.Rollup.Aggregator.Persistence (
   revertProcessingTxsDb,
   revertTxsDb,
   saveBatchResultDb,
+  saveLightBatchResultDb,
   savePreimagesDb,
   seedPreimageDbFromOldState,
  )
@@ -117,17 +119,17 @@ import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
 
 -- | In-process mutable state and cryptographic material for the batcher.
 --
--- ChainSync is the single source of truth for state and Merkle tree leaf hashes.
--- The Batcher reads state from ChainSync's TVars and constructs the preimage
--- from the @utxo_preimages@ DB table. The tree is derived from the preimage
--- (guaranteed consistent after the @search@ fix in symbolic-base).
+-- In node sync mode ChainSync is the single source of truth for state and
+-- Merkle tree leaf hashes. In light sync mode the Batcher updates the same
+-- TVars after its own L1 submission is confirmed. The tree is derived from the
+-- preimage (guaranteed consistent after the @search@ fix in symbolic-base).
 data BatcherState = BatcherState
   { bsLedgerStateVar ∷ !(TVar (State I))
-  -- ^ Rollup state. Written by ChainSync only.
+  -- ^ Rollup state. Written by ChainSync in node mode or the Batcher in light mode.
   , bsLeafHashesVar ∷ !(TVar (Leaves Ud (FieldElement I)))
-  -- ^ Merkle tree leaf hashes. Written by ChainSync only.
+  -- ^ Merkle tree leaf hashes. Written by ChainSync in node mode or the Batcher in light mode.
   , bsMerkleTreeVar ∷ !(TVar (SymMerkle.MerkleTree Ud I))
-  -- ^ Merkle tree derived from leaf hashes. Written by ChainSync only.
+  -- ^ Merkle tree derived from leaf hashes. Written by ChainSync in node mode or the Batcher in light mode.
   , bsTrustedSetup ∷ !(TrustedSetup (G + 6))
   , bsLedgerCircuit ∷ !(LedgerCircuit Bi Bo Ud A S N TxCount)
   , bsProverSecret ∷ !(PlonkupProverSecret BLS12_381_G1_JacobianPoint)
@@ -350,62 +352,62 @@ nullQueuedTx =
 -- and processes a batch when either:
 -- * enough real transactions are queued (≥ bcBatchTransactions), or
 -- * there are pending bridge-ins on L1 (remaining slots are padded with null txs).
-startBatcher ∷ Ctx → BatcherState → IO ()
-startBatcher ctx@Ctx {..} bs = do
+startBatcher ∷ SyncMode → Ctx → BatcherState → IO ()
+startBatcher syncMode ctx@Ctx {..} bs = do
   -- Crash recovery: revert any txs that were left in 'processing' state from a
-  -- prior run. Without this they would be stuck until ChainSync detects a state
-  -- change, and in the worst case (L1 confirmed but DB not updated) they could
-  -- be silently orphaned.
+  -- prior run. Without this they would be stuck until the next state change, and
+  -- in the worst case (L1 confirmed but DB not updated) they could be silently
+  -- orphaned.
   revertProcessingTxsDb ctxDbPath
-  -- Track ChainSync's chain length to detect external updates and for waitForChainSync.
-  lastChainSyncLenRef ← readTVarIO (bsLedgerStateVar bs) >>= newTVarIO . feToInteger . sLength
+  -- Track state length to detect ChainSync updates in node mode and to avoid
+  -- duplicate wait checks after local commits in light mode.
+  lastStateLenRef ← readTVarIO (bsLedgerStateVar bs) >>= newTVarIO . feToInteger . sLength
   chainSyncWarnedRef ← newIORef False
   forever $ do
     let delayMicros = fromIntegral (bcBatchIntervalSeconds ctxBatchConfig) * 1_000_000
     threadDelay delayMicros
-    -- Check ChainSync liveness: warn if no block processed in 5 minutes.
-    now ← getCurrentTime
-    lastAlive ← readTVarIO (bsChainSyncAliveVar bs)
-    let staleSecs = realToFrac (diffUTCTime now lastAlive) ∷ Double
-    alreadyWarned ← readIORef chainSyncWarnedRef
-    if staleSecs > 300
-      then
-        unless alreadyWarned $ do
-          gyLogWarning ctxProviders mempty $
-            "ChainSync appears stuck: no block processed in " <> show (round staleSecs ∷ Int) <> "s"
-          writeIORef chainSyncWarnedRef True
-      else
-        when alreadyWarned $ do
-          gyLogInfo ctxProviders mempty "ChainSync recovered, processing blocks again"
-          writeIORef chainSyncWarnedRef False
-    -- Detect state changes from ChainSync (external updates or rollbacks).
-    -- bsLedgerStateVar is written ONLY by ChainSync, so changes indicate
-    -- on-chain state updates.
-    currentLen ← feToInteger . sLength <$> readTVarIO (bsLedgerStateVar bs)
-    prevLen ← readTVarIO lastChainSyncLenRef
-    when (currentLen /= prevLen) $ do
-      gyLogInfo ctxProviders mempty $
-        "ChainSync state changed (len "
-          <> show prevLen
-          <> " → "
-          <> show currentLen
-          <> "), revalidating pending txs"
-      revertProcessingTxsDb ctxDbPath
-      revalidatePendingTxs ctx bs
-      atomically $ writeTVar lastChainSyncLenRef currentLen
-    -- Guard: verify ChainSync's in-memory state matches the on-chain rollup state
-    -- before generating any ZK proof. If chain sync is still replaying history (e.g.
-    -- fresh start from genesis with no persisted checkpoint), the UTxO tree roots will
-    -- diverge and any proof built from the stale local state will be rejected on-chain.
+    when (syncMode == SyncNode) $ do
+      -- Check ChainSync liveness: warn if no block processed in 5 minutes.
+      now ← getCurrentTime
+      lastAlive ← readTVarIO (bsChainSyncAliveVar bs)
+      let staleSecs = realToFrac (diffUTCTime now lastAlive) ∷ Double
+      alreadyWarned ← readIORef chainSyncWarnedRef
+      if staleSecs > 300
+        then
+          unless alreadyWarned $ do
+            gyLogWarning ctxProviders mempty $
+              "ChainSync appears stuck: no block processed in " <> show (round staleSecs ∷ Int) <> "s"
+            writeIORef chainSyncWarnedRef True
+        else
+          when alreadyWarned $ do
+            gyLogInfo ctxProviders mempty "ChainSync recovered, processing blocks again"
+            writeIORef chainSyncWarnedRef False
+      -- Detect state changes from ChainSync (external updates or rollbacks).
+      currentLen ← feToInteger . sLength <$> readTVarIO (bsLedgerStateVar bs)
+      prevLen ← readTVarIO lastStateLenRef
+      when (currentLen /= prevLen) $ do
+        gyLogInfo ctxProviders mempty $
+          "ChainSync state changed (len "
+            <> show prevLen
+            <> " → "
+            <> show currentLen
+            <> "), revalidating pending txs"
+        revertProcessingTxsDb ctxDbPath
+        revalidatePendingTxs ctx bs
+        atomically $ writeTVar lastStateLenRef currentLen
+    -- Guard: verify the local in-memory state matches the on-chain rollup state
+    -- before generating any ZK proof. In node mode this protects against ChainSync
+    -- lag; in light mode it prevents batching after external updates or crash
+    -- windows that left the local DB stale.
     localRoot ← feToInteger . sUTxO <$> readTVarIO (bsLedgerStateVar bs)
     mOnChainRoot ← queryOnChainUTxORoot ctx
-    let chainSyncCaughtUp = case mOnChainRoot of
+    let localStateMatchesChain = case mOnChainRoot of
           Just onChainRoot → onChainRoot == localRoot
           Nothing → True -- no state UTxO yet (rollup not deployed); safe to proceed
-    if not chainSyncCaughtUp
+    if not localStateMatchesChain
       then
         gyLogWarning ctxProviders mempty $
-          "ChainSync not yet caught up to on-chain state (local root "
+          "Local rollup state does not match on-chain state (local root "
             <> show localRoot
             <> " ≠ on-chain root "
             <> show (maybe 0 id mOnChainRoot)
@@ -421,20 +423,28 @@ startBatcher ctx@Ctx {..} bs = do
             available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
             let (ids, qtxs) = unzip available
                 padded = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
-            processBatchWithLogging ctx bs ids padded lastChainSyncLenRef
+            processBatchWithLogging syncMode ctx bs ids padded lastStateLenRef
           else do
             mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
             for_ mQueued $ \pairs →
               let (ids, qtxs) = unzip pairs
-               in processBatchWithLogging ctx bs ids qtxs lastChainSyncLenRef
+               in processBatchWithLogging syncMode ctx bs ids qtxs lastStateLenRef
 
-processBatchWithLogging ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → TVar Integer → IO ()
-processBatchWithLogging ctx@Ctx {..} bs ids queued lastLenRef =
+processBatchWithLogging ∷ SyncMode → Ctx → BatcherState → [Int64] → [QueuedTx] → TVar Integer → IO ()
+processBatchWithLogging syncMode ctx@Ctx {..} bs ids queued lastLenRef =
   ( do
-      tid ← processBatch ctx bs ids queued
+      tid ← case syncMode of
+        SyncNode → processBatch ctx bs ids queued
+        SyncLight → processBatchLight ctx bs ids queued
       gyLogInfo ctxProviders mempty $ "Batch submitted: " <> show tid
-      -- Wait for ChainSync to process the block.
-      waitForChainSync ctx bs lastLenRef
+      case syncMode of
+        SyncNode →
+          -- Wait for ChainSync to process the block.
+          waitForChainSync ctx bs lastLenRef
+        SyncLight → do
+          newLen ← feToInteger . sLength <$> readTVarIO (bsLedgerStateVar bs)
+          atomically $ writeTVar lastLenRef newLen
+          gyLogInfo ctxProviders mempty "Light mode committed local state update"
   )
     `catches` [ Handler (\(err ∷ GYTxMonadException) → revert >> logException "GYTxMonadException" err)
               , Handler (\(err ∷ SubmitTxException) → revert >> logException "SubmitTxException" err)
@@ -511,9 +521,19 @@ constructPreimage providers dbPath leafHashes = do
       )
       leafHashes
 
+-- | Process a batch in node sync mode. The confirmed L1 transaction is recorded,
+-- but local state is left for ChainSync to observe and persist.
 processBatch ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
-processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
-  -- Read state from ChainSync's TVar, construct preimage from DB, derive tree.
+processBatch = processBatchWithMode SyncNode
+
+-- | Process a batch in light sync mode. After Maestro confirms the L1
+-- transaction, the batcher persists and publishes the new local state itself.
+processBatchLight ∷ Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
+processBatchLight = processBatchWithMode SyncLight
+
+processBatchWithMode ∷ SyncMode → Ctx → BatcherState → [Int64] → [QueuedTx] → IO GYTxId
+processBatchWithMode syncMode ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
+  -- Read state from the shared TVar, construct preimage from DB, derive tree.
   -- With the search fix in symbolic-base, fromLeaves(fmap(hHash.hash) preimage)
   -- produces the same tree as updateLedgerState's output.
   (prevState, prevLeafHashes) ←
@@ -529,6 +549,8 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
       newState :*: witness :*: _newTree :*: preimageWrapped =
         updateLedgerState prevState prevTree prevUtxoPreimage bridgedIn batch sigMaterial
       newPreimage = unComp1 preimageWrapped
+      newLeafHashes = fmap (hHash . hash) newPreimage
+      newMerkleTree = SymMerkle.fromLeaves newLeafHashes
       lci =
         LedgerContractInput
           { lciPreviousState = prevState
@@ -577,5 +599,13 @@ processBatch ctx@Ctx {..} BatcherState {..} ids queuedTxs = do
         body ← buildTxBody skel
         signAndSubmitConfirmed body
   -- Atomically: store preimages + record batch + mark txs as batched.
-  saveBatchResultDb ctxDbPath newEntries ids (Text.pack (show submittedTxId))
+  case syncMode of
+    SyncNode →
+      saveBatchResultDb ctxDbPath newEntries ids (Text.pack (show submittedTxId))
+    SyncLight → do
+      saveLightBatchResultDb ctxDbPath newState newLeafHashes newEntries ids (Text.pack (show submittedTxId))
+      atomically $ do
+        writeTVar bsLedgerStateVar newState
+        writeTVar bsLeafHashesVar newLeafHashes
+        writeTVar bsMerkleTreeVar newMerkleTree
   pure submittedTxId

@@ -22,6 +22,7 @@ module ZkFold.Cardano.Rollup.Aggregator.Persistence (
   saveResetToGenesisDb,
   savePreimagesDb,
   saveBatchResultDb,
+  saveLightBatchResultDb,
   lookupPreimagesDb,
   lookupPreimagesByRefDb,
   getKnownRefsDb,
@@ -550,6 +551,45 @@ saveBatchResultDb dbPath preimageEntries txIds l1TxId = withConn dbPath $ \conn 
       (l1TxId, formatTimestamp now, length txIds)
     batchId ← lastInsertRowId conn
     -- 3. Mark txs as batched.
+    forM_ txIds $ \tid →
+      execute
+        conn
+        "UPDATE txs SET status='batched', batch_id=? WHERE id=?"
+        (batchId, tid)
+ where
+  toText ∷ ToJSON a ⇒ a → Text
+  toText = decodeUtf8 . toStrict . encode
+
+-- | Atomically persist a Maestro-only batch result.
+--
+-- Light mode has no ChainSync writer, so the batcher must save the post-batch
+-- state at the same time as it records the confirmed L1 batch and marks queued
+-- transactions as batched.
+saveLightBatchResultDb
+  ∷ FilePath
+  → State I
+  → Leaves Ud (FieldElement I)
+  → [(FieldElement I, OutputRef I, UTxO A I)]
+  → [Int64]
+  → Text
+  → IO ()
+saveLightBatchResultDb dbPath newState newLeafHashes preimageEntries txIds l1TxId = withConn dbPath $ \conn →
+  withTransaction conn $ do
+    execute
+      conn
+      "INSERT OR REPLACE INTO ledger_state (id, ledger_state, utxo_preimage) VALUES (1, ?, ?)"
+      (toText newState, toText newLeafHashes)
+    forM_ preimageEntries $ \(leafHash, ref, utxo) →
+      execute
+        conn
+        "INSERT OR IGNORE INTO utxo_preimages (leaf_hash, output_ref, utxo_data) VALUES (?, ?, ?)"
+        (toText leafHash, toText ref, toText utxo)
+    now ← getCurrentTime
+    execute
+      conn
+      "INSERT INTO batches (l1_tx_id, created_at, tx_count) VALUES (?, ?, ?)"
+      (l1TxId, formatTimestamp now, length txIds)
+    batchId ← lastInsertRowId conn
     forM_ txIds $ \tid →
       execute
         conn

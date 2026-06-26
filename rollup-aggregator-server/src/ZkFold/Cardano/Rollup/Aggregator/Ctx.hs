@@ -54,8 +54,8 @@ data Ctx = Ctx
   -- ^ Batch processing configuration.
   , ctxDbPath ∷ !FilePath
   -- ^ SQLite database file path shared between server and batcher processes.
-  , ctxNodeSocketPath ∷ !FilePath
-  -- ^ Path to the cardano-node socket. Used for chain sync.
+  , ctxNodeSocketPath ∷ !(Maybe FilePath)
+  -- ^ Optional path to the cardano-node socket. Used only in node sync mode.
   }
 
 logDebug ∷ HasCallStack ⇒ Ctx → String → IO ()

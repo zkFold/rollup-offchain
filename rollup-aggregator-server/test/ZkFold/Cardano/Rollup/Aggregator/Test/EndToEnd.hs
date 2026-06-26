@@ -158,7 +158,7 @@ bridgeInOnlyTests setup =
                 , AggCtx.ctxRollupBuildInfo = buildInfo
                 , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
                 , AggCtx.ctxDbPath = dbPath
-                , AggCtx.ctxNodeSocketPath = nodeSocket
+                , AggCtx.ctxNodeSocketPath = Just nodeSocket
                 }
 
         -- Start ChainSync
@@ -248,7 +248,7 @@ fullFlowTests setup =
                     , AggCtx.ctxRollupBuildInfo = buildInfo
                     , AggCtx.ctxBatchConfig = BatchConfig {bcBatchTransactions = 2, bcBatchIntervalSeconds = 60}
                     , AggCtx.ctxDbPath = dbPath
-                    , AggCtx.ctxNodeSocketPath = nodeSocket
+                    , AggCtx.ctxNodeSocketPath = Just nodeSocket
                     }
 
             -- Start ChainSync so the Merkle tree and state are maintained.
