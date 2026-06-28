@@ -20,13 +20,21 @@ import Control.Concurrent.STM (
   readTVarIO,
   writeTVar,
  )
-import Control.Exception (Exception, Handler (Handler), SomeAsyncException, SomeException, catches, displayException, fromException, throwIO)
-import Control.Monad (forM, forever, when, unless)
+import Control.Exception (
+  Exception,
+  Handler (Handler),
+  SomeAsyncException,
+  SomeException,
+  catches,
+  displayException,
+  fromException,
+  throwIO,
+ )
+import Control.Monad (forM, forever, unless, when)
 import Control.Monad.Reader (asks, runReaderT)
 import Data.Aeson (encode)
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy (toStrict)
-import Data.Foldable (for_)
 import Data.Function ((&))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
@@ -49,6 +57,7 @@ import GeniusYield.Providers.Ogmios (OgmiosProviderException)
 import GeniusYield.TxBuilder (buildTxBody, runGYTxMonadIO, signAndSubmitConfirmed, utxoDatum, utxosAtAddress)
 import GeniusYield.TxBuilder.Errors (GYTxMonadException)
 import GeniusYield.Types (
+  GYAssetClass (..),
   GYAwaitTxException,
   GYProviders,
   GYTxId,
@@ -63,34 +72,13 @@ import GeniusYield.Types (
   utxosRemoveTxOutRef,
   utxosToList,
   valueAssetClass,
-  valueToPlutus, GYAssetClass (..),
+  valueToPlutus,
  )
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), flattenValue)
 import System.Timeout (timeout)
 import ZkFold.Algebra.Class (FromConstant (..), zero)
 import ZkFold.Algebra.EllipticCurve.BLS12_381 (BLS12_381_G1_JacobianPoint)
 import ZkFold.Algebra.EllipticCurve.Class (TwistedEdwards (..))
-import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..), SyncMode (..))
-import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
-import ZkFold.Cardano.Rollup.Aggregator.Persistence (
-  PersistedState (..),
-  dequeueAvailableTxsDb,
-  dequeueTxsDb,
-  enqueueTxDb,
-  failTxsDb,
-  getPendingTxsWithIdsDb,
-  loadState,
-  loadStateHistory,
-  lookupPreimagesByRefDb,
-  lookupPreimagesDb,
-  revertProcessingTxsDb,
-  revertTxsDb,
-  saveBatchResultDb,
-  saveLightBatchResultDb,
-  savePreimagesDb,
-  seedPreimageDbFromOldState,
- )
-import ZkFold.Cardano.Rollup.Aggregator.Types
 import ZkFold.Cardano.Rollup.Api (byteStringToInteger', rollupAddress, updateRollupState)
 import ZkFold.Cardano.Rollup.Api.Utils (computeDelta, feToInteger, stateToRollupState)
 import ZkFold.Cardano.Rollup.Types (ZKInitializedRollupBuildInfo (..))
@@ -116,6 +104,27 @@ import ZkFold.Symbolic.Ledger.Circuit.Compile (
 import ZkFold.Symbolic.Ledger.Offchain.State.Update (updateLedgerState)
 import ZkFold.Symbolic.Ledger.Types
 import ZkFold.Symbolic.Ledger.Utils (unsafeToVector')
+
+import ZkFold.Cardano.Rollup.Aggregator.Config (BatchConfig (..), SyncMode (..))
+import ZkFold.Cardano.Rollup.Aggregator.Ctx (Ctx (..), runQuery)
+import ZkFold.Cardano.Rollup.Aggregator.Persistence (
+  PersistedState (..),
+  dequeueAvailableTxsDb,
+  enqueueTxDb,
+  failTxsDb,
+  getPendingTxsWithIdsDb,
+  loadState,
+  loadStateHistory,
+  lookupPreimagesByRefDb,
+  lookupPreimagesDb,
+  revertProcessingTxsDb,
+  revertTxsDb,
+  saveBatchResultDb,
+  saveLightBatchResultDb,
+  savePreimagesDb,
+  seedPreimageDbFromOldState,
+ )
+import ZkFold.Cardano.Rollup.Aggregator.Types
 
 -- | In-process mutable state and cryptographic material for the batcher.
 --
@@ -275,7 +284,7 @@ queryBridgeIns ctx = runQuery ctx $ do
       initials ← forM others $ \u → do
         datumTuple ← utxoDatum @_ @BridgeUtxoStatus u
         case datumTuple of
-          Right (_, val, BridgeInInitial addr) → if valueAssetClass val GYLovelace >= 5000000 then  pure $ Just (addr, utxoValue u) else pure Nothing
+          Right (_, val, BridgeInInitial addr) → if valueAssetClass val GYLovelace >= 5000000 then pure $ Just (addr, utxoValue u) else pure Nothing
           _ → pure Nothing
       pure $ catMaybes initials
     _ → pure []
@@ -351,7 +360,10 @@ nullQueuedTx =
 -- | Run the batcher loop (blocking). Polls the database at the configured interval
 -- and processes a batch when either:
 -- * enough real transactions are queued (≥ bcBatchTransactions), or
--- * there are pending bridge-ins on L1 (remaining slots are padded with null txs).
+-- * at least one real transaction is queued after the interval, or
+-- * there are pending bridge-ins on L1.
+--
+-- Remaining transaction slots are padded with null transactions.
 startBatcher ∷ SyncMode → Ctx → BatcherState → IO ()
 startBatcher syncMode ctx@Ctx {..} bs = do
   -- Crash recovery: revert any txs that were left in 'processing' state from a
@@ -373,15 +385,13 @@ startBatcher syncMode ctx@Ctx {..} bs = do
       let staleSecs = realToFrac (diffUTCTime now lastAlive) ∷ Double
       alreadyWarned ← readIORef chainSyncWarnedRef
       if staleSecs > 300
-        then
-          unless alreadyWarned $ do
-            gyLogWarning ctxProviders mempty $
-              "ChainSync appears stuck: no block processed in " <> show (round staleSecs ∷ Int) <> "s"
-            writeIORef chainSyncWarnedRef True
-        else
-          when alreadyWarned $ do
-            gyLogInfo ctxProviders mempty "ChainSync recovered, processing blocks again"
-            writeIORef chainSyncWarnedRef False
+        then unless alreadyWarned $ do
+          gyLogWarning ctxProviders mempty $
+            "ChainSync appears stuck: no block processed in " <> show (round staleSecs ∷ Int) <> "s"
+          writeIORef chainSyncWarnedRef True
+        else when alreadyWarned $ do
+          gyLogInfo ctxProviders mempty "ChainSync recovered, processing blocks again"
+          writeIORef chainSyncWarnedRef False
       -- Detect state changes from ChainSync (external updates or rollbacks).
       currentLen ← feToInteger . sLength <$> readTVarIO (bsLedgerStateVar bs)
       prevLen ← readTVarIO lastStateLenRef
@@ -415,20 +425,20 @@ startBatcher syncMode ctx@Ctx {..} bs = do
       else do
         -- Process batches.
         bridgeInData ← queryBridgeIns ctx
+        let txCount = fromIntegral (natVal (Proxy @TxCount))
+            pad qtxs = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
         if not (null bridgeInData)
           then do
             -- Bridge-ins pending: trigger a batch even with fewer than TxCount real txs,
             -- padding the remainder with null transactions.
-            let txCount = fromIntegral (natVal (Proxy @TxCount))
             available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
             let (ids, qtxs) = unzip available
-                padded = qtxs ++ replicate (txCount - length qtxs) nullQueuedTx
-            processBatchWithLogging syncMode ctx bs ids padded lastStateLenRef
+            processBatchWithLogging syncMode ctx bs ids (pad qtxs) lastStateLenRef
           else do
-            mQueued ← dequeueTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
-            for_ mQueued $ \pairs →
-              let (ids, qtxs) = unzip pairs
-               in processBatchWithLogging syncMode ctx bs ids qtxs lastStateLenRef
+            available ← dequeueAvailableTxsDb ctxDbPath (bcBatchTransactions ctxBatchConfig)
+            unless (null available) $
+              let (ids, qtxs) = unzip available
+               in processBatchWithLogging syncMode ctx bs ids (pad qtxs) lastStateLenRef
 
 processBatchWithLogging ∷ SyncMode → Ctx → BatcherState → [Int64] → [QueuedTx] → TVar Integer → IO ()
 processBatchWithLogging syncMode ctx@Ctx {..} bs ids queued lastLenRef =
@@ -453,9 +463,9 @@ processBatchWithLogging syncMode ctx@Ctx {..} bs ids queued lastLenRef =
               , Handler (\(err ∷ MaestroProviderException) → revert >> logException "MaestroProviderException" err)
               , Handler (\(err ∷ KupoProviderException) → revert >> logException "KupoProviderException" err)
               , Handler (\(err ∷ OgmiosProviderException) → revert >> logException "OgmiosProviderException" err)
-              -- Catch-all: covers IOErrors from DB writes, ErrorCall from pure code, etc.
-              -- Re-throws async exceptions (ThreadKilled, StackOverflow) so they still propagate.
-              , Handler $ \(err ∷ SomeException) →
+              , -- Catch-all: covers IOErrors from DB writes, ErrorCall from pure code, etc.
+                -- Re-throws async exceptions (ThreadKilled, StackOverflow) so they still propagate.
+                Handler $ \(err ∷ SomeException) →
                   case fromException err of
                     Just (_ ∷ SomeAsyncException) → throwIO err
                     Nothing → revert >> logException "SomeException" err
